@@ -68,6 +68,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Collapse numbered parts that were archived as separate rows. The live
+	// assembler only sees packets arriving now, so anything already on disk —
+	// including a set split by a collector restart — is repaired here.
+	if count, err := store.AssembleStoredParts(ctx, db, time.Now().UTC()); err != nil {
+		log.Printf("assemble stored parts: %v", err)
+	} else if count > 0 {
+		log.Printf("assembled %d multi-part messages from previously stored rows", count)
+	}
+
 	// One-off repair of rows an earlier build stored wrongly: acknowledgements
 	// and rejections that the recogniser did not catch and that were archived
 	// as ordinary messages. Idempotent — on a repaired archive it deletes
@@ -94,6 +103,11 @@ func run() error {
 	// The flush loop is separate from the read loop on purpose: a slow disk or
 	// a busy database must apply backpressure through the batch size, not stall
 	// the socket long enough for the server to time us out.
+	// The assembler holds the parts of multi-part messages until the set is
+	// complete. Each part is also stored immediately, so a set whose last part
+	// never arrives still leaves its content in the archive.
+	assembler := aprs.NewAssembler(nil)
+
 	var pending atomic.Bool
 	handle := func(p aprs.Packet, at time.Time) {
 		// Acks and rejects are message-format packets, so they arrive under the
@@ -104,11 +118,27 @@ func run() error {
 		if p.Kind == aprs.KindAck || p.Kind == aprs.KindRej {
 			return
 		}
-		if err := writer.Record(ctx, p, at); err != nil {
+		partID, err := writer.RecordPacket(ctx, p, at)
+		if err != nil {
 			log.Printf("store packet from=%s to=%s: %v", p.From, p.To, err)
 			return
 		}
 		pending.Store(true)
+
+		assembled, replacedIDs, complete := assembler.Add(p, partID)
+		if !complete {
+			return
+		}
+		if partID > 0 {
+			replacedIDs = append(replacedIDs, partID)
+		}
+		if err := writer.ReplaceParts(ctx, replacedIDs, assembled, at); err != nil {
+			// The parts stay stored, so nothing is lost; the message shows as
+			// its parts until the next attempt.
+			log.Printf("assemble multi-part from=%s to=%s: %v", p.From, p.To, err)
+			return
+		}
+		log.Printf("assembled a %d-part message from=%s to=%s", len(replacedIDs), p.From, p.To)
 	}
 
 	healthSrv := startHealth(cfg.healthAddr, client, db)

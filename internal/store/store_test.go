@@ -585,3 +585,171 @@ func TestPurgeMisclassifiedResponsesHandlesAChunkedBacklog(t *testing.T) {
 		t.Fatalf("%d rows remain, want 1", remaining)
 	}
 }
+
+// ---- multi-part assembly ----
+
+func TestReplacePartsCollapsesWithoutTouchingOtherRows(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	w, err := NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close(ctx)
+
+	// A decoy: another station sending the same part-one body. It must survive
+	// the replacement, which is why replacement is by row id.
+	decoyID, err := w.RecordPacket(ctx, aprs.Packet{From: "OTHER", To: "SOMEONE", Text: "[1/2] hello", Kind: aprs.KindMessage}, now)
+	if err != nil {
+		t.Fatalf("decoy: %v", err)
+	}
+	p1, err := w.RecordPacket(ctx, aprs.Packet{From: "PKTNET", To: "YD2UNL-9", Text: "[1/2] hello", Kind: aprs.KindMessage, MessageID: "1"}, now)
+	if err != nil {
+		t.Fatalf("part 1: %v", err)
+	}
+	p2, err := w.RecordPacket(ctx, aprs.Packet{From: "PKTNET", To: "YD2UNL-9", Text: "[2/2] world", Kind: aprs.KindMessage, MessageID: "2"}, now)
+	if err != nil {
+		t.Fatalf("part 2: %v", err)
+	}
+
+	if err := w.ReplaceParts(ctx, []int64{p1, p2}, aprs.Packet{
+		From: "PKTNET", To: "YD2UNL-9", Text: "hello world", Kind: aprs.KindMessage, MessageID: "1",
+	}, now); err != nil {
+		t.Fatalf("ReplaceParts: %v", err)
+	}
+
+	page, err := SearchMessages(ctx, db, SearchFilter{Since: now.Add(-time.Hour), Until: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("archive holds %d rows, want 2 (decoy + assembled)", page.Total)
+	}
+	var assembled, decoy bool
+	for _, row := range page.Rows {
+		switch {
+		case row.From == "PKTNET" && row.Text == "hello world":
+			assembled = true
+		case row.From == "OTHER" && row.Text == "[1/2] hello":
+			decoy = true
+		}
+	}
+	if !assembled {
+		t.Fatal("the assembled message is missing")
+	}
+	if !decoy {
+		t.Fatal("the decoy row from another station was deleted")
+	}
+	if decoyID == 0 {
+		t.Fatal("decoy id not recorded")
+	}
+}
+
+func TestReplacePartsIsAtomicOnFailure(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	w, err := NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close(ctx)
+	id, err := w.RecordPacket(ctx, aprs.Packet{From: "A", To: "B", Text: "[1/2] x", Kind: aprs.KindMessage}, now)
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	// The writer holds the archive's single connection while a batch is open,
+	// so the trigger has to be installed after that batch is committed —
+	// otherwise the DDL waits for a connection that a pending transaction owns.
+	if err := w.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	// The parts are deleted only after the assembled row is inserted, so a
+	// failure leaves the original intact rather than destroying what was said.
+	if _, err := db.Exec(`CREATE TRIGGER block_insert BEFORE INSERT ON messages
+		BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	if err := w.ReplaceParts(ctx, []int64{id}, aprs.Packet{From: "A", To: "B", Text: "assembled", Kind: aprs.KindMessage}, now); err == nil {
+		t.Fatal("ReplaceParts succeeded despite the blocked insert")
+	}
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages WHERE id = ?`, id).Scan(&remaining); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatal("the part was deleted even though the assembled row was not written")
+	}
+}
+
+func TestAssembleStoredPartsReplaysTheArchive(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	seed(t, db, []aprs.Packet{
+		// A genuine two-part set, stored apart as the old build left it.
+		{From: "PKTNET", To: "YD2UNL-9", Text: "[1/2]: Use previous info? YES / NO", Kind: aprs.KindMessage, MessageID: "1671"},
+		{From: "PKTNET", To: "YD2UNL-9", Text: "[2/2]: Prev: Endramawan", Kind: aprs.KindMessage, MessageID: "1672"},
+		// A complete single-part message, which must not be touched.
+		{From: "GRP", To: "WP4QNQ-9", Text: "[1/1] Buenos dias PR 73", Kind: aprs.KindMessage, MessageID: "00"},
+		// A part whose sibling never arrived, which must be left alone.
+		{From: "LONE", To: "R", Text: "[1/2] never completed", Kind: aprs.KindMessage},
+	}, now)
+
+	count, err := AssembleStoredParts(ctx, db, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("AssembleStoredParts: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("assembled %d messages, want 1", count)
+	}
+
+	page, err := SearchMessages(ctx, db, SearchFilter{Since: now.Add(-time.Hour), Until: now.Add(2 * time.Hour)})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("%d rows remain, want 3 (assembled, [1/1], lone part)", page.Total)
+	}
+	var assembled, single, lone bool
+	for _, row := range page.Rows {
+		switch {
+		case row.From == "PKTNET":
+			assembled = row.Text == "Use previous info? YES / NO Prev: Endramawan" && row.MessageID == "1671"
+		case row.From == "GRP":
+			single = row.Text == "[1/1] Buenos dias PR 73"
+		case row.From == "LONE":
+			lone = row.Text == "[1/2] never completed"
+		}
+	}
+	if !assembled {
+		t.Fatal("the two parts were not assembled into the expected message")
+	}
+	if !single {
+		t.Fatal("a [1/1] single-part message was modified or removed")
+	}
+	if !lone {
+		t.Fatal("an incomplete set lost its only part")
+	}
+}
+
+func TestAssembleStoredPartsIsIdempotent(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seed(t, db, []aprs.Packet{
+		{From: "S", To: "R", Text: "[1/2] one", Kind: aprs.KindMessage},
+		{From: "S", To: "R", Text: "[2/2] two", Kind: aprs.KindMessage},
+	}, now)
+	if _, err := AssembleStoredParts(ctx, db, now); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	second, err := AssembleStoredParts(ctx, db, now)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if second != 0 {
+		t.Fatalf("second pass assembled %d, want 0", second)
+	}
+}

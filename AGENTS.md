@@ -52,10 +52,19 @@ full suite before every commit.
 6. **The taxonomy is shared in spirit with `simple-ham-bbs`.** Bulletin
    categories and group meanings come from there; extend them (prefix families
    such as `WX…` are this archive's addition) rather than inventing synonyms.
-7. **Never transmit to APRS-IS.** The collector writes one login line and
+7. **A multi-part message is stored once, as one row.** Parts arrive as separate
+   packets with separate ids. Each part is stored as it arrives — a set whose
+   last part never comes must not lose content — and when the set completes,
+   `ReplaceParts` inserts the assembled row and deletes the parts by **row id**
+   in one transaction, insert first. Matching parts by text would delete another
+   station's identical greeting. The live path is `aprs.Assembler`; the startup
+   replay `store.AssembleStoredParts` repairs sets split by a restart. Never
+   assemble `[1/1]`: it is a complete single-part message, and treating it as a
+   set would merge unrelated messages.
+8. **Never transmit to APRS-IS.** The collector writes one login line and
    nothing else. Half-closing the socket is not an option: APRS-IS treats it as
    a dead client and drops the session immediately (observed 2026-11-13).
-8. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
+9. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
    image by `@sha256:`; a tag would be reverted by drift correction.
 
 ## Visual language

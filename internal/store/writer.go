@@ -45,6 +45,107 @@ func NewWriter(ctx context.Context, db *sql.DB) (*Writer, error) {
 	return w, nil
 }
 
+// RecordPacket stores one packet and returns the row id the archive assigned to
+// it, so the caller can replace the row later.
+//
+// Multi-part messages need this: each part is stored as it arrives, because a
+// set whose last part never comes must not lose what was said, and when the
+// set does complete the stored parts are replaced by one row.
+func (w *Writer) RecordPacket(ctx context.Context, p aprs.Packet, at time.Time) (int64, error) {
+	if err := w.open(ctx); err != nil {
+		return 0, err
+	}
+	from := sanitize.SingleLine(p.From)
+	to := sanitize.SingleLine(p.To)
+	text := sanitize.SingleLine(p.Text)
+	if text == "" {
+		return 0, nil
+	}
+	category := ""
+	if p.Kind == aprs.KindBulletin {
+		category = aprs.CategoryFor(p.Bulletin.Group, text)
+	}
+	res, err := w.ins.ExecContext(ctx,
+		at.Unix(), from, to, text, string(p.Kind), p.MessageID, category)
+	if err != nil {
+		return 0, err
+	}
+	w.dirty++
+	if p.Kind == aprs.KindBulletin {
+		key := bulletinKey(from, p.Bulletin.Group, text)
+		if _, err := w.bul.ExecContext(ctx,
+			key, at.Unix(), at.Unix(), from, p.Bulletin.Slot,
+			sanitize.SingleLine(p.Bulletin.Group), category, text); err != nil {
+			return 0, err
+		}
+	}
+	if w.dirty >= DefaultBatchSize {
+		if err := w.commit(ctx); err != nil {
+			return 0, err
+		}
+	}
+	id, err := res.LastInsertId()
+	return id, err
+}
+
+// ReplaceParts turns the stored parts of one multi-part message into a single
+// assembled row, in one transaction.
+//
+// Order matters. The assembled row is inserted first and the part rows deleted
+// after, so a crash between the two leaves two copies — visible, and fixed by
+// the next run — rather than none. The reverse order would delete what has been
+// said and then fail to write its replacement.
+//
+// The parts are identified by id, not by text: two different stations send the
+// same greeting, and a text match would delete somebody else's message.
+func (w *Writer) ReplaceParts(ctx context.Context, partIDs []int64, assembled aprs.Packet, at time.Time) error {
+	// The open batch is committed first: the archive has one connection, and
+	// the transaction below needs it. Committing first also means the parts are
+	// definitely on disk before anything deletes them.
+	if err := w.commit(ctx); err != nil {
+		return err
+	}
+	return replaceParts(ctx, w.db, partIDs, assembled, at)
+}
+
+// replaceParts is the one implementation, shared by the live path and the
+// startup replay.
+func replaceParts(ctx context.Context, db *sql.DB, partIDs []int64, assembled aprs.Packet, at time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	category := ""
+	if assembled.Kind == aprs.KindBulletin {
+		category = aprs.CategoryFor(assembled.Bulletin.Group, assembled.Text)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO messages (received_at, from_callsign, to_callsign, msg_text, kind, message_id, category)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		at.Unix(),
+		sanitize.SingleLine(assembled.From),
+		sanitize.SingleLine(assembled.To),
+		sanitize.SingleLine(assembled.Text),
+		string(assembled.Kind),
+		assembled.MessageID,
+		category); err != nil {
+		return err
+	}
+	for _, id := range partIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, _ = db.ExecContext(ctx,
+		`UPDATE collector_state SET last_write_at = ? WHERE id = 1`, time.Now().Unix())
+	return nil
+}
+
 // Record stores one parsed packet.
 //
 // The caller has already classified it; this function only normalises and
@@ -292,6 +393,72 @@ func PurgeMisclassifiedResponses(ctx context.Context, db *sql.DB) (int64, error)
 		}
 	}
 	return total, ctx.Err()
+}
+
+// AssembleStoredParts replays archived numbered parts through the assembler and
+// collapses each complete set into one message.
+//
+// The live path cannot cover this on its own: the assembly window is minutes
+// long, so a collector restart between part one and part two — a rollout, a
+// network drop, a crash — would leave the pair split forever. The rows are
+// already on disk, so replaying them closes that gap.
+//
+// Only rows whose body begins with `[` are read: that prefix is the only form
+// that can be a part, so the scan skips the archive's real bulk. Rows are fed
+// in arrival order and the assembler's clock is set to each row's timestamp, so
+// its timeout applies to the archive's timeline — a pair stored days apart is
+// still rejected — while the scan itself does not depend on when it runs.
+//
+// It returns how many messages it assembled.
+func AssembleStoredParts(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, received_at, from_callsign, to_callsign, msg_text, message_id
+		FROM messages
+		WHERE kind = 'message' AND substr(msg_text, 1, 1) = '['
+		ORDER BY received_at ASC, id ASC`)
+	if err != nil {
+		return 0, err
+	}
+	type storedPart struct {
+		id     int64
+		at     time.Time
+		packet aprs.Packet
+	}
+	var parts []storedPart
+	for rows.Next() {
+		var id, at int64
+		var from, to, text, messageID string
+		if err := rows.Scan(&id, &at, &from, &to, &text, &messageID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		parts = append(parts, storedPart{
+			id: id, at: time.Unix(at, 0).UTC(),
+			packet: aprs.Packet{From: from, To: to, Text: text, Kind: aprs.KindMessage, MessageID: messageID},
+		})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	assembler := aprs.NewAssembler(nil)
+	assembled := 0
+	for _, part := range parts {
+		clock := part.at
+		assembler.SetClock(func() time.Time { return clock })
+		message, replaced, complete := assembler.Add(part.packet, part.id)
+		if !complete || len(replaced) < 2 {
+			continue
+		}
+		clock = now
+		assembler.SetClock(func() time.Time { return clock })
+		if err := replaceParts(ctx, db, replaced, message, part.at); err != nil {
+			return assembled, err
+		}
+		assembled++
+	}
+	return assembled, ctx.Err()
 }
 
 // Optimize runs a bounded incremental vacuum and refreshes the query planner's
