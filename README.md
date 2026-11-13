@@ -122,6 +122,23 @@ kubectl -n aprs rollout restart deploy/aprs-archive-admin
 The session token is derived from the password, so changing it ends every
 existing admin session.
 
+## Admin: database maintenance
+
+`/admin/database` on the admin host shows the archive's health and offers the
+operations an operator actually needs:
+
+- **Checkpoint** — fold the WAL into the database file.
+- **Vacuum** — reclaim free pages (reports bytes reclaimed, or "nothing").
+- **Rebuild indexes** — repair or defragment the indexes.
+- **Back up now** — a consistent `VACUUM INTO` snapshot, safe while the
+  collector writes; keeps the newest 7 and downloads as a file.
+- **Delete before a date** — apply retention immediately. A future date is
+  refused, because it would delete the archive.
+
+Every write form carries a confirmation token derived from the admin password,
+so a cross-site POST cannot trigger a maintenance action and a browser replaying
+a stale form is refused. All of it exists only on the admin deployment.
+
 ## Removing bot traffic already stored
 
 Validation applies to what arrives, not to what is already in the archive. To

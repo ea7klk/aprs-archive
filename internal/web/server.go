@@ -44,7 +44,10 @@ type Config struct {
 	// it empty and therefore cannot write at all.
 	AdminDBPath string
 	// PrefixSource is the callsign prefix dataset the admin page refreshes.
-	PrefixSource      string
+	PrefixSource string
+	// BackupKeep is how many snapshots the admin page retains. An unbounded
+	// backup directory fills the claim and stops collection.
+	BackupKeep        int
 	CollectorStaleFor time.Duration
 	// Now is injectable so tests can pin the clock.
 	Now func() time.Time
@@ -78,6 +81,9 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 	}
 	if cfg.ReportMaxDays <= 0 {
 		cfg.ReportMaxDays = 92
+	}
+	if cfg.BackupKeep <= 0 {
+		cfg.BackupKeep = 7
 	}
 	// A report limit above the retention period would promise history the
 	// archive no longer holds; the smaller of the two wins.
@@ -138,6 +144,17 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /admin/exceptions", s.adminAddException)
 		mux.HandleFunc("POST /admin/exceptions/delete/{callsign}", s.adminDeleteException)
 		mux.HandleFunc("POST /admin/prefixes/refresh", s.adminRefreshPrefixes)
+
+		// Database maintenance. Every route re-checks the session; the write
+		// forms additionally carry a confirmation token.
+		mux.HandleFunc("GET /admin/database", s.adminDatabase)
+		mux.HandleFunc("POST /admin/database/checkpoint", s.adminCheckpoint)
+		mux.HandleFunc("POST /admin/database/vacuum", s.adminVacuum)
+		mux.HandleFunc("POST /admin/database/reindex", s.adminReindex)
+		mux.HandleFunc("POST /admin/database/backup", s.adminBackup)
+		mux.HandleFunc("GET /admin/database/backup/{name}", s.adminDownloadBackup)
+		mux.HandleFunc("POST /admin/database/backup/{name}/delete", s.adminDeleteBackup)
+		mux.HandleFunc("POST /admin/database/delete-before", s.adminDeleteBefore)
 	}
 
 	return securityHeaders(mux)

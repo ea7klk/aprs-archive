@@ -1,0 +1,42 @@
+{{/* The admin application's layout.
+     It shares the stylesheet with the public archive — same estate, same hand —
+     but not the navigation: an operator here is not a visitor, and linking back
+     into the public pages as if this were the same application would blur the
+     one boundary that keeps the public server honest. */}}
+{{define "admin_layout_start"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{.AppName}} · admin</title>
+  <style>{{style}}</style>
+</head>
+<body>
+<div class="frame">
+<header>
+  <div class="head solo">
+    <div class="head-main">
+      <div class="logo"><i aria-hidden="true"></i><a class="appname" href="/admin">{{.AppName}} · ADMIN</a></div>
+      <div class="sub ident">https://aprs-admin.ea7klk.es · exception list and archive maintenance</div>
+    </div>
+  </div>
+  {{if .Confirm}}
+  <nav class="tabs" aria-label="Admin sections">
+    <a href="/admin" {{if not .AdminNav}}aria-current="page"{{end}}>Exceptions</a>
+    <a href="/admin/database" {{if .AdminNav}}aria-current="page"{{end}}>Database</a>
+    <form method="post" action="/admin/logout" class="push"><button class="link" type="submit">Sign out</button></form>
+  </nav>
+  {{end}}
+</header>
+<main id="main">
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{end}}
+
+{{define "admin_layout_end"}}</main>
+<footer><div class="foot"><span>{{.AppName}} admin · writes are audit-visible in the collector log</span><span>Retention {{.RetentionDays}} days</span></div></footer>
+</div>
+</body>
+</html>{{end}}

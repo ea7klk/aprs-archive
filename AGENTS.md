@@ -82,7 +82,14 @@ full suite before every commit.
    in both directions, so a "drop" entry works for a station that prefixes would
    accept. Exceptions are reloaded every minute, so the admin page takes effect
    without a restart.
-11. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
+11. **Admin writes carry a confirmation token.** Every admin write form posts
+   `confirm`, derived from the admin password; `requireAdminPost` refuses without
+   it. This is the CSRF guard and the replay guard in one. A new write route
+   must go through `requireAdminPost`, not `requireAdmin`.
+12. **Backups use `VACUUM INTO`, never a file copy.** A copy of a live SQLite
+   file plus its WAL is torn. The backup directory is inside the claim and is
+   pruned to `BackupKeep`; an unbounded one fills the disk and stops collection.
+13. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
    image by `@sha256:`; a tag would be reverted by drift correction.
 
 ## Visual language

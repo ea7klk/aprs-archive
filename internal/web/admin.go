@@ -71,6 +71,25 @@ func (a *admin) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(want)) == 1
 }
 
+// confirmToken is the CSRF token the admin write forms carry.
+//
+// It is derived from the same key as the session, so it expires with the
+// session and changes when the password changes. A cross-site request cannot
+// read it, and a browser replaying a stale form is refused.
+func (a *admin) confirmToken() string {
+	mac := hmac.New(sha256.New, a.sessionKey)
+	mac.Write([]byte("aprs-archive-admin-confirm-v1"))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// validConfirm compares a submitted token in constant time.
+func (a *admin) validConfirm(got string) bool {
+	if !a.enabled() || got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(a.confirmToken())) == 1
+}
+
 // checkPassword compares a submitted password in constant time.
 func (a *admin) checkPassword(got string) bool {
 	if !a.enabled() || got == "" {
@@ -83,29 +102,29 @@ func (a *admin) checkPassword(got string) bool {
 
 func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.admin.enabled() {
-		s.render(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
+		s.renderAdminStatus(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
 		return
 	}
 	if s.admin.authorized(r) {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, "admin_login", nil, "")
+	s.renderAdmin(w, r, "admin_login", nil, "")
 }
 
 func (s *Server) adminLoginPost(w http.ResponseWriter, r *http.Request) {
 	if !s.admin.enabled() {
-		s.render(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
+		s.renderAdminStatus(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		s.render(w, r, http.StatusBadRequest, "admin_login", nil, "Malformed form.")
+		s.renderAdminStatus(w, r, http.StatusBadRequest, "admin_login", nil, "Malformed form.")
 		return
 	}
 	if !s.admin.checkPassword(r.PostFormValue("password")) {
 		// Same message for a wrong password and a disabled page: nothing to
 		// learn from probing.
-		s.render(w, r, http.StatusUnauthorized, "admin_login", nil, "Wrong password.")
+		s.renderAdminStatus(w, r, http.StatusUnauthorized, "admin_login", nil, "Wrong password.")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -127,7 +146,7 @@ func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
 	if !s.admin.enabled() {
-		s.render(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
+		s.renderAdminStatus(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
 		return
 	}
 	if !s.admin.authorized(r) {
@@ -138,7 +157,7 @@ func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
 	exceptions, err := store.ListExceptions(ctx, s.admin.db)
 	if err != nil {
 		log.Printf("admin: list exceptions: %v", err)
-		s.render(w, r, http.StatusInternalServerError, "admin", nil, "The exception list could not be read.")
+		s.renderAdmin(w, r, "admin", nil, "The exception list could not be read.")
 		return
 	}
 	// The page shows the dataset validation is based on, so it must have one:
@@ -165,8 +184,9 @@ func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
 		PrefixSource:  s.admin.fetcher.URL,
 		PrefixRefresh: refreshErr,
 		Flash:         r.URL.Query().Get("ok"),
+		ErrorDetail:   r.URL.Query().Get("err"),
 	}
-	s.render(w, r, http.StatusOK, "admin", data, "")
+	s.renderAdmin(w, r, "admin", data, "")
 }
 
 type adminData struct {
@@ -176,6 +196,7 @@ type adminData struct {
 	PrefixSource  string
 	PrefixRefresh error
 	Flash         string
+	ErrorDetail   string
 }
 
 // adminAddException records an operator decision.

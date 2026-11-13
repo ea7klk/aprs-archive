@@ -1,0 +1,95 @@
+{{define "admin_database"}}{{template "admin_layout_start" .}}
+{{$d := .Data}}{{$i := $d.Info}}
+<div class="pagehead">
+  <div><p class="kicker">Admin</p><h1>Database</h1><p class="lede">Health, size and maintenance for the archive file. The collector is the writer of messages; these operations act on the same file and report what they did.</p></div>
+</div>
+
+{{if $d.Flash}}<div class="flash">{{$d.Flash}}</div>{{end}}
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{if $d.ErrorDetail}}<div class="error">{{$d.ErrorDetail}}</div>{{end}}
+
+<dl class="status">
+  <div class="cell"><dt>Messages</dt><dd>{{num $i.Messages}}</dd></div>
+  <div class="cell"><dt>Bulletins</dt><dd>{{num $i.Bulletins}}</dd></div>
+  <div class="cell"><dt>File size</dt><dd>{{humanBytes $i.Bytes}}</dd></div>
+  <div class="cell"><dt>Write-ahead log</dt><dd>{{humanBytes $i.WALBytes}}</dd></div>
+  <div class="cell"><dt>Reclaimable</dt><dd>{{humanBytes $i.FreeBytes}}</dd></div>
+</dl>
+
+<div class="strip"><h2>Health</h2><span>SQLite</span></div>
+<dl class="detail-grid">
+  <dt>Integrity</dt><dd>{{if eq $i.QuickCheck "ok"}}<b class="state-ok">quick_check ok</b>{{else}}<b class="state-bad">{{$i.QuickCheck}}</b>{{end}}</dd>
+  <dt>Schema version</dt><dd>{{$i.SchemaVer}}</dd>
+  <dt>Journal mode</dt><dd>{{$i.JournalMode}}</dd>
+  <dt>Page size</dt><dd>{{num $i.PageSize}} B</dd>
+  <dt>Pages</dt><dd>{{num $i.PageCount}} total, {{num $i.FreePages}} free</dd>
+  <dt>Oldest message</dt><dd>{{if $i.OldestAt.IsZero}}—{{else}}{{stamp $i.OldestAt}} UTC{{end}}</dd>
+  <dt>Newest message</dt><dd>{{if $i.NewestAt.IsZero}}—{{else}}{{stamp $i.NewestAt}} UTC{{end}}</dd>
+  <dt>Path</dt><dd class="pre">{{$i.Path}}</dd>
+</dl>
+
+<div class="strip mt-lg"><h2>Table sizes</h2></div>
+<div class="scroll"><table>
+  <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+  <tbody>{{range $d.Counts}}<tr><td>{{.Name}}</td><td>{{num .Rows}}</td></tr>{{end}}</tbody>
+</table></div>
+
+<div class="strip mt-lg"><h2>Maintenance</h2><span>each action reports its outcome</span></div>
+<div class="cards">
+  <article class="card">
+    <div class="between">
+      <div><h2>Checkpoint</h2><p class="quiet">Fold the write-ahead log back into the archive file. Run it before taking a copy by hand.</p></div>
+      <form method="post" action="/admin/database/checkpoint"><input type="hidden" name="confirm" value="{{.Confirm}}"><input type="hidden" name="return_to" value="database"><button class="btn" type="submit">Checkpoint</button></form>
+    </div>
+  </article>
+  <article class="card">
+    <div class="between">
+      <div><h2>Vacuum</h2><p class="quiet">Rewrite the file to reclaim {{humanBytes $i.FreeBytes}} of free pages. Needs free disk space equal to the archive and takes exclusive use while it runs, so the collector waits.</p></div>
+      <form method="post" action="/admin/database/vacuum"><input type="hidden" name="confirm" value="{{.Confirm}}"><input type="hidden" name="return_to" value="database"><button class="btn" type="submit">Vacuum</button></form>
+    </div>
+  </article>
+  <article class="card">
+    <div class="between">
+      <div><h2>Rebuild indexes</h2><p class="quiet">Recreate every index. Repairs an index reported damaged and reclaims index bloat. Safe while collection runs.</p></div>
+      <form method="post" action="/admin/database/reindex"><input type="hidden" name="confirm" value="{{.Confirm}}"><input type="hidden" name="return_to" value="database"><button class="btn" type="submit">Rebuild</button></form>
+    </div>
+  </article>
+  <article class="card">
+    <div class="between">
+      <div><h2>Backup now</h2><p class="quiet">Write a consistent snapshot with <span class="accent">VACUUM INTO</span> — safe while the collector writes, unlike a file copy. Keeps the newest {{$d.Keep}}.</p></div>
+      <form method="post" action="/admin/database/backup"><input type="hidden" name="confirm" value="{{.Confirm}}"><input type="hidden" name="return_to" value="database"><button class="btn" type="submit">Back up</button></form>
+    </div>
+  </article>
+</div>
+
+<div class="strip mt-lg"><h2>Delete before a date</h2><span>irreversible</span></div>
+<form class="filters" method="post" action="/admin/database/delete-before">
+  <input type="hidden" name="confirm" value="{{.Confirm}}">
+  <input type="hidden" name="return_to" value="database">
+  <div><label for="d-before">Delete messages older than (UTC)</label><input id="d-before" name="before" type="date" required></div>
+  <div><button class="btn danger" type="submit" onclick="return confirm('Delete every message older than this date? This cannot be undone.')">Delete</button></div>
+</form>
+<p class="quiet mt-sm">Applies the same sweep the collector runs nightly, immediately. A date in the future is refused rather than deleting the archive.</p>
+
+<div class="strip mt-lg"><h2>Backups</h2><span class="pre">{{$d.BackupDir}}</span></div>
+{{if $d.Backups}}
+<div class="scroll"><table class="tbl-pairs">
+  <thead><tr><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Backups}}
+    <tr>
+      <td><strong>{{.Name}}</strong></td>
+      <td>{{humanBytes .Bytes}}</td>
+      <td class="metaline">{{stamp .Created}}</td>
+      <td><div class="actions">
+        <a class="btn secondary small" href="/admin/database/backup/{{.Name}}">Download</a>
+        <form method="post" action="/admin/database/backup/{{.Name}}/delete"><input type="hidden" name="confirm" value="{{$.Confirm}}"><input type="hidden" name="return_to" value="database"><button class="btn danger small" type="submit" onclick="return confirm('Delete this backup?')">Delete</button></form>
+      </div></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table></div>
+{{else}}
+<p class="muted mt">No backups yet. The first one you take here is writeable and downloadable; nothing else schedules them.</p>
+{{end}}
+{{template "admin_layout_end" .}}{{end}}
