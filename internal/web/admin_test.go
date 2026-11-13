@@ -153,8 +153,10 @@ func TestAdminSessionCookieIsClosedByDefault(t *testing.T) {
 	if !found.HttpOnly || !found.Secure || found.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie is not closed: %+v", found)
 	}
-	if found.Path != "/admin" {
-		t.Fatalf("cookie path = %q, want /admin", found.Path)
+	// The cookie must cover "/" as well: the admin host's front page is the bare
+	// hostname, and a cookie scoped to /admin is not sent there.
+	if found.Path != "/" {
+		t.Fatalf("cookie path = %q, want / (the admin host's front page)", found.Path)
 	}
 }
 

@@ -128,9 +128,14 @@ func (s *Server) adminLoginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     adminCookie,
-		Value:    s.admin.sessionToken(),
-		Path:     "/admin",
+		Name:  adminCookie,
+		Value: s.admin.sessionToken(),
+		// The cookie covers the whole admin host, not just /admin: the front
+		// page is "/", and a cookie scoped to /admin is not sent there, so a
+		// signed-in operator was bounced to the login page on the bare
+		// hostname. The admin host serves nothing else, so the wider scope
+		// exposes the cookie to no additional origin.
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
@@ -140,7 +145,7 @@ func (s *Server) adminLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/admin", MaxAge: -1, HttpOnly: true})
+	http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true})
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 

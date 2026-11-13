@@ -289,3 +289,42 @@ func TestAdminTrailingSlashRedirects(t *testing.T) {
 		t.Fatal("/admin/ is a 404")
 	}
 }
+
+// TestSignedInOperatorLandsOnTheAdminApp is the regression for a cookie scoped
+// too narrowly: the session cookie was set for /admin, so "/" never received it
+// and a signed-in operator was sent back to the login page.
+func TestSignedInOperatorLandsOnTheAdminApp(t *testing.T) {
+	ts := newAdminServer(t, "pw")
+	// rawClient does not follow redirects, so the first hop is observable.
+	c := rawClient()
+	resp, err := c.PostForm(ts.URL+"/admin/login", url.Values{"password": {"pw"}})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	resp.Body.Close()
+	if len(resp.Cookies()) == 0 {
+		t.Fatal("no session cookie")
+	}
+	// Reuse the cookie through a following client, as a browser would.
+	b := client()
+	for _, ck := range resp.Cookies() {
+		b.Jar.SetCookies(mustParse(t, ts.URL), []*http.Cookie{ck})
+	}
+	root, err := b.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("get /: %v", err)
+	}
+	defer root.Body.Close()
+	if root.Request.URL.Path != "/admin" {
+		t.Fatalf("a signed-in operator at / landed on %s, want /admin", root.Request.URL.Path)
+	}
+}
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u
+}
