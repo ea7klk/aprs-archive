@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,4 +171,52 @@ func Backup(ctx context.Context, db *sql.DB, dest string) error {
 		return fmt.Errorf("vacuum into %s: %w", dest, err)
 	}
 	return nil
+}
+
+// WaitForReader opens the archive read-only, waiting for the collector to
+// create it.
+//
+// Both pods start from the same bundle, so on a cold bring-up the web container
+// can start before the collector has created the database file. Exiting there
+// would be a crash-loop for a condition that resolves itself in a second, and
+// the restart count would then report a failure that never happened. The wait
+// is bounded: if the collector is genuinely broken, the caller gets an error
+// naming what it was waiting for.
+//
+// A schema-version mismatch is not retried. That is a deployment error — a web
+// image older than the collector's schema — and restarting cannot fix it.
+func WaitForReader(path string, timeout time.Duration) (*sql.DB, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	logged := false
+	for {
+		db, err := OpenReader(path)
+		if err == nil {
+			if logged {
+				log.Printf("archive opened after waiting")
+			}
+			return db, nil
+		}
+		lastErr = err
+		if !isTransientOpen(err) {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("archive did not become available within %s: %w", timeout, lastErr)
+		}
+		if !logged {
+			log.Printf("waiting for the archive at %s: %v", path, err)
+			logged = true
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// isTransientOpen reports whether an open failure is "the file is not there
+// yet" rather than "this file is not an archive".
+func isTransientOpen(err error) bool {
+	msg := err.Error()
+	return errors.Is(err, os.ErrNotExist) ||
+		strings.Contains(msg, "unable to open database file") ||
+		strings.Contains(msg, "no such file")
 }

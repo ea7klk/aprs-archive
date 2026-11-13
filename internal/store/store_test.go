@@ -456,3 +456,54 @@ func TestTopPairsQueryUsesTheKindIndex(t *testing.T) {
 		t.Fatalf("pair query scans the whole table:\n%s", joined)
 	}
 }
+
+// ---- opening while the collector has not created the file yet ----
+
+func TestWaitForReaderWaitsForTheCollector(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		db, err := OpenWriter(path)
+		if err == nil {
+			db.Close()
+		}
+	}()
+	start := time.Now()
+	db, err := WaitForReader(path, 10*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForReader: %v", err)
+	}
+	db.Close()
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Fatalf("returned before the archive existed (%s)", elapsed)
+	}
+}
+
+func TestWaitForReaderGivesUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "never.db")
+	if _, err := WaitForReader(path, 300*time.Millisecond); err == nil {
+		t.Fatal("a missing archive did not time out")
+	}
+}
+
+func TestWaitForReaderRefusesAVersionMismatchImmediately(t *testing.T) {
+	// A file that is not an archive is a deployment error, not a race: waiting
+	// cannot fix a wrong image, so the failure must be immediate.
+	path := filepath.Join(t.TempDir(), "other.db")
+	other, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := other.Exec("CREATE TABLE x (id INTEGER)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	other.Close()
+
+	start := time.Now()
+	if _, err := WaitForReader(path, 10*time.Second); err == nil {
+		t.Fatal("a non-archive file was accepted")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("a version mismatch was retried for %s", elapsed)
+	}
+}

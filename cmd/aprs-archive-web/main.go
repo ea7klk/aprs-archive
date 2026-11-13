@@ -49,7 +49,7 @@ func run() error {
 	stale, _ := strconv.Atoi(env("APRS_ARCHIVE_COLLECTOR_STALE_MINUTES", "15"))
 	cfg.CollectorStaleFor = time.Duration(stale) * time.Minute
 
-	db, err := store.OpenReader(cfg.DBPath)
+	db, err := store.WaitForReader(cfg.DBPath, 5*time.Minute)
 	if err != nil {
 		return err
 	}
