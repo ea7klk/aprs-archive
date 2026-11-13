@@ -34,6 +34,12 @@ full suite before every commit.
 2. **Acks and rejects are not stored.** They parse as message-format packets so
    the parser models them, but `main.go` drops them before the writer, and
    `TestArchivedKindsExcludeAcks` pins it.
+   Recognition is `internal/aprs.responseID`, and it must accept the forms that
+   really arrive: `ack4A}`, `ack49}`, `ackJU}JT`, `ack`, `ACK`, `rej99}`,
+   `ack{12}`, `ack 12`. It must not classify prose that begins with those
+   letters (`acknowledge`, `rejoin now`) — `TestResponseRecognition` holds both
+   directions. Rows an earlier build stored wrongly are removed at collector
+   start by `store.PurgeMisclassifiedResponses`, which uses the same parser.
 3. **Retention is enforced by the collector**, in chunks, on a nightly timer and
    once at startup. A single unbounded `DELETE` after a long outage would hold
    the write lock and grow the WAL to the size of the data removed.

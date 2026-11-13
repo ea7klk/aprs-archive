@@ -68,6 +68,16 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// One-off repair of rows an earlier build stored wrongly: acknowledgements
+	// and rejections that the recogniser did not catch and that were archived
+	// as ordinary messages. Idempotent — on a repaired archive it deletes
+	// nothing and logs nothing.
+	if removed, err := store.PurgeMisclassifiedResponses(ctx, db); err != nil {
+		return fmt.Errorf("purge misclassified acknowledgements: %w", err)
+	} else if removed > 0 {
+		log.Printf("removed %d acknowledgements that an earlier build stored as messages", removed)
+	}
+
 	writer, err := store.NewWriter(ctx, db)
 	if err != nil {
 		return fmt.Errorf("prepare writer: %w", err)

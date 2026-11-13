@@ -186,8 +186,11 @@ func StripMessageID(text string) string {
 // IsResponse reports whether text is a bare ack or rej with no id, which some
 // clients send for messages they received without one.
 func IsResponse(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(StripMessageID(text)))
-	return isResponseToken(lower, "ack") || isResponseToken(lower, "rej")
+	if _, ok := responseID(text, "ack"); ok {
+		return true
+	}
+	_, ok := responseID(text, "rej")
+	return ok
 }
 
 // NormalizeMessageID upper-cases an id and keeps at most five characters.
@@ -216,43 +219,150 @@ func TruncateRunes(s string, n int) string {
 	return string(runes[:n])
 }
 
+// responseID recognises an acknowledgement or a rejection and returns the id it
+// refers to (possibly empty, for the bare "ack" and "rej" some clients send).
+//
+// APRS101 defines the format as `ack<id>` / `rej<id>`, and recommends lower
+// case. Real traffic is looser, and the archive has to recognise all of it:
+//
+//	ack4A}   ack49}   ackJU}JT   ack   ACK   rej99}   ack{12}   ack 12
+//
+// The rule is: the body starts with ack or rej, a whole keyword, and what
+// follows is an id-like token — up to five alphanumeric characters, optionally
+// introduced by `{` and followed by anything. That excludes prose, because a
+// word that merely begins with the keyword continues with letters rather than
+// ending the keyword: "acknowledge" and "rejoined" have a longer alphanumeric
+// run, and "rejoin now" has a run that ends in the middle of the word rather
+// than at a separator.
+//
+// One case stays ambiguous and is decided in favour of the sender: a bare
+// keyword followed by a space and a word ("ack the signal is loud") is a
+// message, not an acknowledgement of nothing.
 func responseID(text, prefix string) (string, bool) {
 	text = strings.TrimSpace(text)
-	if body, _, ok := strings.Cut(text, "{"); ok {
-		text = body
-	}
-	suffix, ok := cutPrefixLower(text, prefix)
-	if !ok || suffix == "" || len([]rune(suffix)) > 5 {
+	if len(text) < len(prefix) {
 		return "", false
 	}
-	for _, r := range suffix {
-		if !isIDRune(r) {
+	if !strings.EqualFold(text[:len(prefix)], prefix) {
+		return "", false
+	}
+	rest := text[len(prefix):]
+	if rest == "" {
+		// A bare acknowledgement: valid, with no id.
+		return "", true
+	}
+
+	// Optional `{` introducing the id, as in "ack{12}" and "ACKQP{12". The
+	// brace delimits the id, so its case does not matter: "ack{ab1}" is an id
+	// even though a bare lower-case run would be read as a word.
+	rest = strings.TrimSpace(rest)
+	braced := false
+	if strings.HasPrefix(rest, "{") {
+		braced = true
+		rest = rest[1:]
+		end := 0
+		for end < len(rest) && isIDByte(rest[end]) {
+			end++
+		}
+		if end == 0 || end > 5 {
+			// "ack{" with nothing, or a brace around a word.
+			return "", end == 0 && braced
+		}
+		return NormalizeMessageID(rest[:end]), true
+	}
+	switch {
+	case rest == "":
+		return "", braced // "ack{" with nothing after it is still an ack
+	case rest[0] == ' ' || rest[0] == '\t':
+		// "ack 12" is an id; "ack now" is prose. A single token of at most five
+		// alphanumeric characters is an id.
+		token := strings.Fields(rest)
+		if len(token) == 0 {
 			return "", false
 		}
+		candidate := token[0]
+		if len(candidate) > 5 || !allIDBytes(candidate) {
+			return "", false
+		}
+		return NormalizeMessageID(candidate), true
 	}
-	return suffix, true
+
+	// "ack4A}", "ack49}", "ackJU}JT", "rej99}".
+	run := 0
+	lowerSeen := false
+	for run < len(rest) && isIDByte(rest[run]) {
+		if rest[run] >= 'a' && rest[run] <= 'z' {
+			lowerSeen = true
+		}
+		run++
+	}
+	if run > 5 {
+		return "", false
+	}
+	if run > 0 && lowerSeen {
+		// A run with lower-case letters in it. An id is conventionally upper
+		// case; a lower-case run is the middle of a word ("rejoin", "ackerly").
+		// The only lower-case ids that exist in practice are quoted in braces
+		// ("ack{ab1"), and those took the braced path above.
+		return "", false
+	}
+	if run == 0 {
+		// Punctuation straight after the keyword: "ack}".
+		return "", isKeywordAlone(rest)
+	}
+	return NormalizeMessageID(rest[:run]), true
 }
 
-func isResponseToken(text, prefix string) bool {
-	suffix, ok := cutPrefixLower(text, prefix)
-	if !ok {
-		return false
-	}
-	if suffix == "" {
-		return true
-	}
-	if len([]rune(suffix)) > 5 {
-		return false
-	}
-	for _, r := range suffix {
-		if !isIDRune(r) {
+// allIDBytes reports whether every byte of s is alphanumeric.
+func allIDBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isIDByte(s[i]) {
 			return false
 		}
 	}
 	return true
 }
 
-// cutPrefixLower is strings.CutPrefix after folding the prefix to lower case.
+// isKeywordAlone reports whether the text after "ack" or "rej" is punctuation
+// rather than prose. "ack}" and "ack >" are acknowledgements; "acknowledge the
+// message" never reaches here (its prefix match consumes the word), but "ack
+// now" must stay a message.
+func isKeywordAlone(rest string) bool {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return true
+	}
+	for _, r := range rest {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isIDByte(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
+// cutPrefixLower matches an ack or rej keyword case-insensitively and returns
+// what follows it.
+//
+// Two things make the keyword a token rather than the start of a word:
+//
+//   - **Boundary after the keyword.** An ack or rej is written `ack<id>`,
+//     `ack<id>}`, `ack{<id>}`, `ack <id>` or `ack` alone. A letter directly
+//     after the keyword means a word: "acknowledge" and "rejoined" are not
+//     acknowledgements.
+//   - **Boundary after the id.** The id is at most five alphanumeric
+//     characters and must be followed by punctuation, whitespace or the end of
+//     the packet. That is what separates `ack4A}` (an id) from `acknowledge`
+//     (an eleven-character word): the run of alphanumeric characters after the
+//     keyword is checked for its length and its terminator together.
+//
+// One consequence, accepted deliberately: `ackJU}` — a mixed-case id with no
+// separator before the closing brace is fine, but `ackJU` with nothing after it
+// is ambiguous with a word and is treated as a message. A false negative costs
+// one stored packet; a false positive deletes somebody's message.
 func cutPrefixLower(text, prefix string) (string, bool) {
 	if len(text) < len(prefix) {
 		return "", false
@@ -260,7 +370,42 @@ func cutPrefixLower(text, prefix string) (string, bool) {
 	if !strings.EqualFold(text[:len(prefix)], prefix) {
 		return "", false
 	}
-	return text[len(prefix):], true
+	rest := text[len(prefix):]
+	if rest == "" {
+		return rest, true
+	}
+	// Take the alphanumeric run that follows the keyword. An id is a token,
+	// so its case is mixed freely ("4A", "JU", "QP"); a word is not.
+	run := 0
+	upperSeen := false
+	for run < len(rest) && isIDByte(rest[run]) {
+		if rest[run] >= 'A' && rest[run] <= 'Z' {
+			upperSeen = true
+		}
+		run++
+	}
+	terminated := run < len(rest) // something other than an id character follows
+	if run > 5 {
+		return "", false
+	}
+	if run > 0 && !upperSeen {
+		// All lower case: "rejoined" would otherwise read as an id. An id
+		// written entirely in lower case with no separator is indistinguishable
+		// from a word, and the archive does not delete words.
+		return "", false
+	}
+	if run > 0 && !terminated {
+		return "", false
+	}
+	if run == 0 {
+		// No id: the keyword must stand alone or be followed by punctuation.
+		switch rest[0] {
+		case ' ', '\t', '{', '}', '!', '>', '.', ':', '-', ',':
+			return rest, true
+		}
+		return "", false
+	}
+	return rest, true
 }
 
 func isIDRune(r rune) bool {

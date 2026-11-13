@@ -225,6 +225,75 @@ func Sweep(ctx context.Context, db *sql.DB, r Retention, now time.Time) (message
 	return messages, bulletins, ctx.Err()
 }
 
+// PurgeMisclassifiedResponses deletes acknowledgements and rejections that an
+// earlier version stored as ordinary messages.
+//
+// This exists because the first recogniser only accepted `ack<id>` with nothing
+// after it, so real traffic — `ack49}`, `ackJU}JT` — was archived as a message
+// and has sat in the counts ever since. Those rows are not traffic, and leaving
+// them would keep them in the statistics and in every report long after the
+// collector stopped producing new ones.
+//
+// The decision comes from the parser, not from a LIKE pattern here. One
+// recogniser means the archive cannot disagree with itself about what an
+// acknowledgement is, and a fix to the parser repairs old rows too.
+//
+// It is chunked for the same reason the retention sweep is. It returns how many
+// rows it removed, so the caller can log the one-off transition and stay quiet
+// afterwards.
+func PurgeMisclassifiedResponses(ctx context.Context, db *sql.DB) (int64, error) {
+	const chunk = 2000
+	var total int64
+	// The batch is taken newest-first: the page never needs to be complete for
+	// the DELETE to be correct, and the loop stops as soon as a batch contains
+	// no misclassification.
+	var cursor int64 = 1 << 62
+	for {
+		rows, err := db.QueryContext(ctx, `
+			SELECT id, msg_text FROM messages
+			WHERE kind = 'message' AND id < ?
+			ORDER BY id DESC LIMIT ?`, cursor, chunk)
+		if err != nil {
+			return total, err
+		}
+		var ids []any
+		var lowest int64
+		for rows.Next() {
+			var id int64
+			var text string
+			if err := rows.Scan(&id, &text); err != nil {
+				rows.Close()
+				return total, err
+			}
+			lowest = id
+			if aprs.IsResponse(text) {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return total, err
+		}
+		if len(ids) > 0 {
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+			res, err := db.ExecContext(ctx, "DELETE FROM messages WHERE id IN ("+placeholders+")", ids...)
+			if err != nil {
+				return total, err
+			}
+			n, _ := res.RowsAffected()
+			total += n
+		}
+		if lowest <= 1 {
+			break
+		}
+		cursor = lowest
+		if ctx.Err() != nil {
+			return total, ctx.Err()
+		}
+	}
+	return total, ctx.Err()
+}
+
 // Optimize runs a bounded incremental vacuum and refreshes the query planner's
 // statistics after a sweep, so the file shrinks without rewriting the whole
 // database every night.

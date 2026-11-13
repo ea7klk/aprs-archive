@@ -507,3 +507,81 @@ func TestWaitForReaderRefusesAVersionMismatchImmediately(t *testing.T) {
 		t.Fatalf("a version mismatch was retried for %s", elapsed)
 	}
 }
+
+// ---- purging rows an earlier build stored wrongly ----
+
+func TestPurgeMisclassifiedResponsesUsesTheParser(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Now().UTC()
+	seed(t, db, []aprs.Packet{
+		msg("A", "B", "keep me"),
+		msg("A", "B", "ack please, the signal is loud"), // prose: keep
+		msg("EA3JCH-13", "EB3CLX-3", "ack49}"),          // a receipt: remove
+		msg("ANSRVR", "KB3KBR-1", "ackQP}"),             // a receipt: remove
+		msg("X", "Y", "rej99}"),                         // a receipt: remove
+		bulletin("C", "NWS", "warning"),                 // not a message: keep
+	}, now)
+	// The old recogniser would have left these as kind=message.
+	removed, err := PurgeMisclassifiedResponses(context.Background(), db)
+	if err != nil {
+		t.Fatalf("PurgeMisclassifiedResponses: %v", err)
+	}
+	if removed != 3 {
+		t.Fatalf("removed %d rows, want 3", removed)
+	}
+	var remaining int
+	if err := db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&remaining); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if remaining != 3 {
+		t.Fatalf("%d rows remain, want 3 (message, prose, bulletin)", remaining)
+	}
+	var bodies []string
+	rows, err := db.Query("SELECT msg_text FROM messages ORDER BY id")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		bodies = append(bodies, b)
+	}
+	for _, b := range bodies {
+		if b == "ack49}" || b == "ackQP}" || b == "rej99}" {
+			t.Fatalf("receipt %q survived the purge", b)
+		}
+	}
+	// Idempotent: a second pass leaves the prose and the message alone.
+	if again, err := PurgeMisclassifiedResponses(context.Background(), db); err != nil || again != 0 {
+		t.Fatalf("second purge removed %d, err %v", again, err)
+	}
+}
+
+func TestPurgeMisclassifiedResponsesHandlesAChunkedBacklog(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Now().UTC()
+	packets := make([]aprs.Packet, 0, 2600)
+	for i := 0; i < 2600; i++ {
+		packets = append(packets, msg("A", "B", "ack49}"))
+	}
+	packets = append(packets, msg("A", "B", "a real message"))
+	seed(t, db, packets, now)
+
+	removed, err := PurgeMisclassifiedResponses(context.Background(), db)
+	if err != nil {
+		t.Fatalf("PurgeMisclassifiedResponses: %v", err)
+	}
+	if removed != 2600 {
+		t.Fatalf("removed %d, want 2600", removed)
+	}
+	var remaining int
+	if err := db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&remaining); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("%d rows remain, want 1", remaining)
+	}
+}
