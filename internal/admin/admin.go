@@ -338,7 +338,20 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		// Lax, not Strict.
+		//
+		// Strict withholds the cookie on any navigation the browser does not
+		// consider a same-site *request*, which includes the redirect that
+		// follows a form POST when the page was reached by a link or a typed
+		// URL. The effect was a login that succeeded and then bounced straight
+		// back to the login page, because the request for /admin arrived
+		// without the session.
+		//
+		// Lax still refuses the cookie on cross-site POSTs and on embedding, so
+		// the CSRF protection is unchanged — and the write forms carry their own
+		// confirmation token regardless. What Lax adds is the top-level
+		// same-site navigation a signed-in operator makes constantly.
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   12 * 60 * 60,
 	})
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)

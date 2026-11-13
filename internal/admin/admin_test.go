@@ -489,3 +489,57 @@ func TestPasswordSetWithTrailingNewlineWorks(t *testing.T) {
 		t.Fatalf("a secret written with a newline refused the password: %d", resp.StatusCode)
 	}
 }
+
+// TestSessionCookieIsLax is the regression for a login that succeeded and then
+// bounced back to the login page.
+//
+// The cookie was SameSite=Strict. A browser withholds a Strict cookie on the
+// navigation that follows a cross- or unknown-context entry, so the request for
+// /admin arrived without the session and the server redirected to /admin/login
+// — looking exactly like a rejected password. Lax sends the cookie on top-level
+// same-site navigation and still refuses it on cross-site POSTs.
+func TestSessionCookieIsLax(t *testing.T) {
+	ts := newTestServer(t)
+	resp, err := rawClient().PostForm(ts.URL+"/admin/login", url.Values{"password": {"pw"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	var ck *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == cookieName {
+			ck = c
+		}
+	}
+	if ck == nil {
+		t.Fatal("no session cookie")
+	}
+	if ck.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("SameSite = %v, want Lax: Strict withholds the cookie from the "+
+			"navigation that follows a form POST and the login appears to fail", ck.SameSite)
+	}
+	// The rest of the hardening is unchanged.
+	if !ck.HttpOnly || !ck.Secure {
+		t.Fatalf("cookie lost HttpOnly/Secure: %+v", ck)
+	}
+}
+
+// TestLoginThenNavigateIsOneFlow walks the sequence a browser performs: POST the
+// form, follow the redirect as a GET, and land on a page with the functions.
+func TestLoginThenNavigateIsOneFlow(t *testing.T) {
+	ts := newTestServer(t)
+	c := client() // follows redirects, keeps cookies
+	if _, err := c.PostForm(ts.URL+"/admin/login", url.Values{"password": {"pw"}}); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	for _, p := range []string{"/admin", "/admin/database", "/admin/sql"} {
+		resp, err := c.Get(ts.URL + p)
+		if err != nil {
+			t.Fatalf("get %s: %v", p, err)
+		}
+		resp.Body.Close()
+		if resp.Request.URL.Path != p {
+			t.Fatalf("%s bounced to %s — the session was not sent", p, resp.Request.URL.Path)
+		}
+	}
+}
