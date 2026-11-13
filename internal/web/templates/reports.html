@@ -7,7 +7,7 @@
 <form class="filters" method="get" action="/reports">
   <input type="hidden" name="run" value="1">
   <div><label for="r-since">From date (UTC)</label><input id="r-since" name="since" type="date" value="{{date $spec.Since}}"></div>
-  <div><label for="r-until">To date (UTC)</label><input id="r-until" name="until" type="date" value="{{date $spec.Until}}"></div>
+  <div><label for="r-until">To date (UTC)</label><input id="r-until" name="until" type="date" value="{{lastDay $spec.Until}}"></div>
   <div><label for="r-group">Group by</label><select id="r-group" name="group_by">{{range $d.Groupings}}<option value="{{.ID}}" {{if eq $spec.GroupBy .ID}}selected{{end}}>{{.Label}}</option>{{end}}</select></div>
   <div><label for="r-kind">Kind</label><select id="r-kind" name="kind">
     <option value="" {{if eq $spec.Kind ""}}selected{{end}}>Any</option>
@@ -20,7 +20,7 @@
 </form>
 
 {{if $d.Ran}}
-<div class="strip mt-lg"><h2>Result</h2><span>{{num $d.Result.Total}} packets · {{date $spec.Since}} → {{date $spec.Until}}</span></div>
+<div class="strip mt-lg"><h2>Result</h2><span>{{num $d.Result.Total}} packets · {{date $spec.Since}} → {{lastDay $spec.Until}}</span></div>
 {{if $d.Error}}<div class="error">{{$d.Error}}</div>{{end}}
 {{if $d.Result.Rows}}
 <div class="pageactions mb"><a class="btn" href="/reports/export.csv?{{$d.ExportQuery}}">Download CSV</a></div>
@@ -35,7 +35,7 @@
 
 <div class="strip mt-lg"><h2>Summary</h2></div>
 <dl class="detail-grid">
-  <dt>Window</dt><dd>{{stamp $spec.Since}} → {{stamp $spec.Until}} UTC</dd>
+  <dt>Window</dt><dd>{{date $spec.Since}} 00:00 → {{lastDay $spec.Until}} 24:00 UTC (inclusive)</dd>
   <dt>Grouping</dt><dd>{{$spec.GroupBy}}</dd>
   <dt>Kind</dt><dd>{{if $spec.Kind}}{{$spec.Kind}}{{else}}any{{end}}</dd>
   <dt>Station</dt><dd>{{if $spec.Station}}{{$spec.Station}}{{else}}any{{end}}</dd>

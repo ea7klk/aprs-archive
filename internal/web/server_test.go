@@ -300,3 +300,102 @@ func TestStatisticsShowsBusiestPairs(t *testing.T) {
 		t.Fatal("a bulletin address appears as a station in the pair ranking")
 	}
 }
+
+// TestReportIncludesTheDayTheUserPicked is the regression for the empty
+// reports reported on 2026-11-13.
+//
+// The form offers days, not instants. A report whose "to date" was today used
+// to stop at midnight today, so any row after midnight was excluded — and on a
+// young archive, whose first row is mid-day, that made the only useful range an
+// empty one. The seeded row is deliberately at 00:30 on the chosen day: the
+// old code returned zero for it, the fixed code does not.
+func TestReportIncludesTheDayTheUserPicked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	db, err := store.OpenWriter(path)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	ctx := context.Background()
+	w, err := store.NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	day := time.Date(2026, 11, 13, 0, 30, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if err := w.Record(ctx, aprs.Packet{From: "EA7KLK-9", To: "N0CALL", Text: "x", Kind: aprs.KindMessage}, day.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	if err := w.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reader, err := store.OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer reader.Close()
+	db.Close()
+	srv, err := New(Config{DBPath: path, AppName: "APRS Archive", Version: "test",
+		RetentionDays: 365, CollectorStaleFor: 15 * time.Minute,
+		Now: func() time.Time { return day.Add(6 * time.Hour) }}, reader)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h := srv.Handler()
+
+	// The range the user actually sent: a window that ends on the chosen day and
+	// begins before it, so window() has nothing to repair and the upper bound is
+	// the only thing deciding whether the day is included.
+	for _, p := range []string{
+		"/reports?run=1&group_by=day&since=2026-11-10&until=2026-11-13",
+		"/reports?run=1&group_by=hour&since=2026-11-10&until=2026-11-13",
+		"/reports?run=1&group_by=station&since=2026-11-10&until=2026-11-13",
+		"/reports?run=1&group_by=kind&since=2026-11-10&until=2026-11-13",
+	} {
+		body := get(t, h, p).Body.String()
+		if strings.Contains(body, "The report is empty") {
+			t.Errorf("%s returned an empty report", p)
+		}
+		if strings.Contains(body, ">0 packets") {
+			t.Errorf("%s counted zero packets", p)
+		}
+	}
+}
+
+// TestReportCSVMatchesTheDayRange checks the export speaks the same inclusive
+// days as the form, so the file is not the empty one the page no longer shows.
+func TestReportCSVMatchesTheDayRange(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := get(t, srv.Handler(), "/reports/export.csv?group_by=day&since=2026-11-13&until=2026-11-13")
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("csv has no data rows: %q", lines)
+	}
+	if !strings.Contains(lines[1], "2026-11-13") {
+		t.Fatalf("csv row is not the chosen day: %q", lines[1])
+	}
+	if strings.Contains(lines[1], ",0,") {
+		t.Fatalf("csv day has zero packets: %q", lines[1])
+	}
+}
+
+// TestReportFormEchoesTheInclusiveDay guards the other half of the confusion:
+// the form must not show the exclusive bound, or reopening a report changes it.
+func TestReportFormEchoesTheInclusiveDay(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := get(t, srv.Handler(), "/reports?since=2026-11-01&until=2026-11-13").Body.String()
+	if !strings.Contains(body, `name="until" type="date" value="2026-11-13"`) {
+		t.Fatal("the form does not echo the day the user picked")
+	}
+}
+
+// TestSearchFormEchoesTheInclusiveDay is the same defect as the report form's:
+// Until is exclusive in the query but a day in the form. Echoing the exclusive
+// bound moved the date forward by one every time a search was reopened.
+func TestSearchFormEchoesTheInclusiveDay(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := get(t, srv.Handler(), "/messages?since=2026-11-01&until=2026-11-13").Body.String()
+	if !strings.Contains(body, `name="until" type="date" value="2026-11-13"`) {
+		t.Fatal("the search form does not echo the day the user picked")
+	}
+}

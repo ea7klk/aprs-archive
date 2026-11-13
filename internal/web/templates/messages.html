@@ -9,7 +9,7 @@
     <option value="bulletin" {{if eq .Filter.Kind "bulletin"}}selected{{end}}>Bulletin</option>
   </select></div>
   <div><label for="f-since">From date (UTC)</label><input id="f-since" name="since" type="date" value="{{if not .Filter.Since.IsZero}}{{date .Filter.Since}}{{end}}"></div>
-  <div><label for="f-until">To date (UTC)</label><input id="f-until" name="until" type="date" value="{{if not .Filter.Until.IsZero}}{{date .Filter.Until}}{{end}}"></div>
+  <div><label for="f-until">To date (UTC)</label><input id="f-until" name="until" type="date" value="{{if not .Filter.Until.IsZero}}{{lastDay .Filter.Until}}{{end}}"></div>
   <div><label for="f-per">Per page</label><select id="f-per" name="per_page"><option value="25" {{if eq .Filter.Limit 25}}selected{{end}}>25</option><option value="50" {{if eq .Filter.Limit 50}}selected{{end}}>50</option><option value="100" {{if eq .Filter.Limit 100}}selected{{end}}>100</option><option value="200" {{if eq .Filter.Limit 200}}selected{{end}}>200</option></select></div>
   <div><button class="btn" type="submit">Search</button></div>
 </form>

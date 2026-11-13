@@ -36,6 +36,21 @@ func parseTemplates() (*template.Template, error) {
 			}
 			return t.UTC().Format("15:04:05")
 		},
+		// lastDay renders an exclusive upper bound as the last day it includes.
+		// Report and search windows are half-open in SQL and inclusive in the
+		// form; every page must speak the second language.
+		"lastDay": func(t time.Time) string {
+			if t.IsZero() {
+				return "—"
+			}
+			return t.AddDate(0, 0, -1).UTC().Format("2006-01-02")
+		},
+		"lastStamp": func(t time.Time) string {
+			if t.IsZero() {
+				return "—"
+			}
+			return t.AddDate(0, 0, -1).UTC().Format("2006-01-02") + " 24:00"
+		},
 		"stamp": func(t time.Time) string {
 			if t.IsZero() {
 				return "—"

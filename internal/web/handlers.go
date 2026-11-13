@@ -208,7 +208,14 @@ func parseReportSpec(r *http.Request) ReportSpec {
 		Category: strings.TrimSpace(q.Get("category")),
 	}
 	spec.Since = parseDate(q.Get("since"))
-	spec.Until = parseDate(q.Get("until"))
+	// The date picker marks days, not instants: "until 13 November" must include
+	// 13 November, so the bound is the start of the following day. Without this
+	// the report asked for rows before midnight on the day the archive began and
+	// returned nothing, while the same range on the search page returned data —
+	// the two used different rules for the same field.
+	if d := parseDate(q.Get("until")); !d.IsZero() {
+		spec.Until = d.AddDate(0, 0, 1)
+	}
 	return spec
 }
 
@@ -236,7 +243,9 @@ func (spec *ReportSpec) window(now time.Time, maxDays int) {
 func (spec ReportSpec) query() string {
 	v := url.Values{}
 	v.Set("since", spec.Since.Format(store.DateLayout))
-	v.Set("until", spec.Until.Format(store.DateLayout))
+	// Until is exclusive internally; the form and the export both speak in days,
+	// so it is written back as the last included day.
+	v.Set("until", spec.Until.AddDate(0, 0, -1).Format(store.DateLayout))
 	v.Set("group_by", spec.GroupBy)
 	if spec.Kind != "" {
 		v.Set("kind", spec.Kind)
