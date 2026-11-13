@@ -1,0 +1,28 @@
+# The archive volume.
+#
+# `retained-local-path` is the only class used for application data in this
+# estate: the built-in `local-path` class deletes the data directory when a
+# claim is removed, and this claim holds the whole archive.
+#
+# 5 GiB covers one year at the measured rate (about 27,600 messages a day, worst
+# case 67-character bodies, three indexes: measured at 1.7 GiB per year). The
+# headroom is for a busier feed and for SQLite free pages before a vacuum.
+#
+# spec.volumeName is written once the claim is bound. Fleet wraps bundles in a
+# Helm release, and a manifest that omits it would be merged as an empty string,
+# which the API server rejects as immutable (see infra FLEET-IMPROVEMENT.md 6.2).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aprs-archive-data
+  namespace: aprs
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: retained-local-path
+  volumeMode: Filesystem

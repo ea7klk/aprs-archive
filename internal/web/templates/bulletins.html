@@ -1,0 +1,68 @@
+{{define "bulletins"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Bulletins</p><h1>Bulletin reader</h1><p class="lede">Broadcasts addressed to a group rather than a station. Repeats are collapsed: the counter shows how many times the same bulletin was transmitted.</p></div>
+</div>
+
+<nav class="sections" aria-label="Bulletin categories">
+  {{range $d.Categories}}<a href="/bulletins{{if .ID}}?category={{.ID}}{{end}}" {{if eq $.Data.Current .ID}}aria-current="page"{{end}}><span>{{if .ID}}{{.ID}}{{else}}all{{end}}</span><b>{{num .Count}}</b></a>{{end}}
+</nav>
+
+<form class="filters mt" method="get" action="/bulletins">
+  <input type="hidden" name="category" value="{{$d.Current}}">
+  <div><label for="b-group">Group</label><input id="b-group" name="group" value="{{$d.Group}}" placeholder="NWS"></div>
+  <div><label for="b-from">From</label><input id="b-from" name="from" placeholder="sender callsign"></div>
+  <div><label for="b-text">Text contains</label><input id="b-text" name="text" placeholder="tornado"></div>
+  <div><button class="btn" type="submit">Filter</button></div>
+</form>
+
+<div class="strip mt-lg"><h2>{{if $d.Current}}{{$d.Current}}{{else}}All bulletins{{end}}</h2><span>{{num $d.Page.Total}} bulletins</span></div>
+{{if $d.Page.Rows}}
+<div class="cards">
+  {{range $d.Page.Rows}}
+  <article class="card">
+    <div class="between">
+      <div>
+        <h2>{{if .Group}}BLN {{.Group}}{{else}}BLN{{.Slot}}{{end}}{{if .Category}} · <span class="accent">{{.Category}}</span>{{end}}</h2>
+        <div class="metaline">{{.From}} · first heard {{stamp .FirstSeen}} UTC · last {{stamp .LastSeen}} UTC</div>
+      </div>
+      <div class="row"><span class="n" title="transmissions">×{{.SeenCount}}</span><a class="btn secondary small" href="/bulletins/{{.ID}}">Open</a></div>
+    </div>
+    <p class="pre mt-sm">{{.Text}}</p>
+  </article>
+  {{end}}
+</div>
+{{template "pager" dict "Page" $d.Page "Query" $d.Query}}
+{{else}}
+<p class="muted mt">No bulletins in this selection.</p>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "bulletin_detail"}}{{template "layout_start" .}}
+{{$d := .Data}}{{$b := $d.Bulletin}}
+<div class="pagehead">
+  <div><p class="kicker">Bulletin · {{if $b.Group}}{{.Data.Bulletin.Group}}{{else}}no group{{end}}</p><h1>From {{$b.From}}</h1></div>
+  <div class="pageactions">
+    <a class="btn secondary" href="/bulletins?category={{$b.Category}}">Category {{$b.Category}}</a>
+    <a class="btn secondary" href="/bulletins?group={{$b.Group}}">Group {{$b.Group}}</a>
+    <a class="btn secondary" href="/bulletins">All bulletins</a>
+  </div>
+</div>
+<p class="msgtext">{{$b.Text}}</p>
+<dl class="detail-grid mt-lg">
+  <dt>Category</dt><dd><span class="accent">{{$b.Category}}</span></dd>
+  <dt>Slot</dt><dd>BLN{{$b.Slot}}</dd>
+  <dt>Sender</dt><dd><a class="accent" href="/stations/{{$b.From}}">{{$b.From}}</a></dd>
+  <dt>First heard</dt><dd>{{stamp $b.FirstSeen}} UTC</dd>
+  <dt>Last heard</dt><dd>{{stamp $b.LastSeen}} UTC</dd>
+  <dt>Transmissions</dt><dd>{{num $b.SeenCount}}</dd>
+</dl>
+
+{{if $d.Transmissions.Rows}}
+<div class="strip mt-lg"><h2>Transmissions</h2><span>{{num $d.Transmissions.Total}} on the air</span></div>
+<div class="scroll"><table class="aprs-table received-table">
+  <thead><tr><th class="time-col">Received (UTC)</th><th class="callsign-col">From</th><th class="destination-col">Address</th><th class="message-col">Message</th></tr></thead>
+  <tbody>{{range $d.Transmissions.Rows}}<tr><td><a class="rowlink aprs-time" href="/messages/{{.ID}}"><span>{{date .At}}</span><span>{{clock .At}}</span></a></td><td><a class="rowlink" href="/stations/{{.From}}">{{.From}}</a></td><td><a class="rowlink" href="/messages/{{.ID}}">{{.To}}</a></td><td class="message-col"><a class="rowlink" href="/messages/{{.ID}}">{{.Text}}</a></td></tr>{{end}}</tbody>
+</table></div>
+{{end}}
+{{template "layout_end" .}}{{end}}

@@ -1,0 +1,151 @@
+name: CI and release image
+
+# Delivery follows the estate convention: test and build here, publish the
+# image to GHCR on a release, then pin the published digest in this repository's
+# Fleet bundle (`fleet/aprs-archive/`) because Fleet reconciles with
+# `correctDrift` enabled. The cluster host has no Docker daemon, so nothing here
+# may assume `docker compose`, and `kubectl set image` would be reverted.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Image tag to publish (for example v1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' && !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  tests:
+    name: Go tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage report
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          {
+            echo "## Go coverage"
+            echo
+            echo '```text'
+            tail -1 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Race detector
+        run: go test -race ./...
+
+  build:
+    name: Build and publish images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: tests
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ env.IMAGE_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+            type=raw,value=${{ env.IMAGE_VERSION }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Log in to GHCR
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One image, two entrypoints: the collector and the web server share the
+      # module, the schema types and the sanitiser, so shipping two images would
+      # mean two versions of the same code drifting apart. The image carries both
+      # binaries and the Deployments choose one.
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record published digest
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: |
+          {
+            echo "## Published image"
+            echo
+            echo '```'
+            echo "${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+            echo
+            echo "Pin this digest in \`fleet/aprs-archive/resources.yaml\` (both Deployments)."
+          } >> "$GITHUB_STEP_SUMMARY"

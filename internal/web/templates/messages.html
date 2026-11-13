@@ -1,0 +1,126 @@
+{{define "searchForm"}}
+<form class="filters" method="get" action="{{.Action}}">
+  <div><label for="f-from">From callsign</label><input id="f-from" name="from" value="{{.Filter.From}}" placeholder="EA7KLK-9"></div>
+  <div><label for="f-to">To callsign</label><input id="f-to" name="to" value="{{.Filter.To}}" placeholder="N0CALL"></div>
+  <div><label for="f-text">Message contains</label><input id="f-text" name="text" value="{{.Filter.Text}}" placeholder="warning"></div>
+  <div><label for="f-kind">Kind</label><select id="f-kind" name="kind">
+    <option value="" {{if eq .Filter.Kind ""}}selected{{end}}>Any</option>
+    <option value="message" {{if eq .Filter.Kind "message"}}selected{{end}}>Message</option>
+    <option value="bulletin" {{if eq .Filter.Kind "bulletin"}}selected{{end}}>Bulletin</option>
+  </select></div>
+  <div><label for="f-since">From date (UTC)</label><input id="f-since" name="since" type="date" value="{{if not .Filter.Since.IsZero}}{{date .Filter.Since}}{{end}}"></div>
+  <div><label for="f-until">To date (UTC)</label><input id="f-until" name="until" type="date" value="{{if not .Filter.Until.IsZero}}{{date .Filter.Until}}{{end}}"></div>
+  <div><label for="f-per">Per page</label><select id="f-per" name="per_page"><option value="25" {{if eq .Filter.Limit 25}}selected{{end}}>25</option><option value="50" {{if eq .Filter.Limit 50}}selected{{end}}>50</option><option value="100" {{if eq .Filter.Limit 100}}selected{{end}}>100</option><option value="200" {{if eq .Filter.Limit 200}}selected{{end}}>200</option></select></div>
+  <div><button class="btn" type="submit">Search</button></div>
+</form>
+{{end}}
+
+{{define "messages"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Search</p><h1>Messages</h1><p class="lede">Every message and bulletin transmission the collector heard. Delivery receipts — APRS acknowledgements and rejections — are not archived: this keeps what was said, not the bookkeeping around it.</p></div>
+  <div class="pageactions"><a class="btn secondary" href="/stations">Stations</a></div>
+</div>
+
+{{template "searchForm" dict "Action" "/messages" "Filter" $d.Filter}}
+
+<div class="strip mt-lg"><h2>Results</h2><span>{{num $d.Page.Total}} matching packets</span></div>
+{{if $d.Page.Rows}}
+<div class="scroll">
+<table class="aprs-table received-table">
+  <thead><tr>
+    <th class="time-col">Received (UTC)</th>
+    <th class="callsign-col">From</th>
+    <th class="destination-col">To</th>
+    <th class="status-col">Kind</th>
+    <th class="message-col">Message</th>
+  </tr></thead>
+  <tbody>
+  {{range $d.Page.Rows}}
+    <tr>
+      <td><a class="rowlink aprs-time" href="/messages/{{.ID}}"><span>{{date .At}}</span><span>{{clock .At}}</span></a></td>
+      <td><a class="rowlink" href="/stations/{{.From}}">{{.From}}</a></td>
+      <td><a class="rowlink" href="/stations/{{.To}}">{{.To}}</a></td>
+      <td>{{template "kindBadge" .Kind}}</td>
+      <td class="message-col"><a class="rowlink" href="/messages/{{.ID}}">{{.Text}}</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{template "pager" dict "Page" $d.Page "Query" $d.Query}}
+{{else}}
+<p class="muted mt">No packets match. Widen the date range, or clear a field: an empty search defaults to the last 24 hours.</p>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "message_detail"}}{{template "layout_start" .}}
+{{$d := .Data}}{{$m := $d.Message}}
+<div class="pagehead">
+  <div><p class="kicker">{{template "kindBadge" $m.Kind}} · record {{$m.ID}}</p><h1>{{$m.From}} <span class="accent">→</span> {{$m.To}}</h1></div>
+  <div class="pageactions">
+    <a class="btn secondary" href="/messages?from={{$m.From}}">All from {{$m.From}}</a>
+    <a class="btn secondary" href="/messages?to={{$m.To}}">All to {{$m.To}}</a>
+  </div>
+</div>
+
+<p class="msgtext">{{$m.Text}}</p>
+
+<dl class="detail-grid mt-lg">
+  <dt>Received</dt><dd>{{stamp $m.At}} UTC</dd>
+  <dt>From</dt><dd><a class="accent" href="/stations/{{$m.From}}">{{$m.From}}</a></dd>
+  <dt>To</dt><dd>{{if eq $m.Kind "bulletin"}}<a class="accent" href="/bulletins?group={{$m.To}}">{{$m.To}}</a> · <a href="/bulletins?category={{$m.Category}}">{{$m.Category}}</a>{{else}}<a class="accent" href="/stations/{{$m.To}}">{{$m.To}}</a>{{end}}</dd>
+  <dt>Kind</dt><dd>{{template "kindBadge" $m.Kind}}</dd>
+  <dt>Message ID</dt><dd>{{if $m.MessageID}}{{$m.MessageID}}{{else}}<span class="muted">none</span>{{end}}</dd>
+  <dt>Retention</dt><dd>Kept {{$d.RetentionDays}} days from receipt</dd>
+</dl>
+
+{{if gt (len $d.Conversation) 1}}
+<div class="strip mt-lg"><h2>The exchange</h2><span>{{len $d.Conversation}} messages between {{$m.From}} and {{$m.To}} within 48 hours</span></div>
+<div class="cards">
+  {{range $d.Conversation}}
+  <article class="card">
+    <div class="between"><div><strong>{{.From}} → {{.To}}</strong><div class="metaline">{{stamp .At}} UTC</div></div><a class="btn secondary small" href="/messages/{{.ID}}">Record</a></div>
+    <p class="pre mt-sm">{{.Text}}</p>
+  </article>
+  {{end}}
+</div>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "stations"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Explore</p><h1>Sending stations</h1><p class="lede">The busiest stations over the last seven days. Any callsign can also be opened directly at <span class="accent">/stations/CALLSIGN</span>.</p></div>
+  <div class="pageactions"><a class="btn secondary" href="/messages">Search messages</a></div>
+</div>
+<form class="filters" method="get" action="/stations"><div><label for="s-call">Open a station</label><input id="s-call" name="callsign" placeholder="EA7KLK-9"></div><div><button class="btn" type="button" onclick="location.href='/stations/'+encodeURIComponent(document.getElementById('s-call').value.trim().toUpperCase())">Open</button></div></form>
+<div class="strip mt-lg"><h2>Last seven days</h2><span>{{len $d.Senders}} stations</span></div>
+{{template "bars" $d.Senders}}
+{{if not $d.Senders}}<p class="muted">No traffic in the last seven days.</p>{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "station_detail"}}{{template "layout_start" .}}
+{{$d := .Data}}{{$s := $d.Station}}
+<div class="pagehead">
+  <div><p class="kicker">Station</p><h1>{{$s.Callsign}}</h1><p class="lede">Seen from {{date $s.FirstAt}} to {{date $s.LastAt}}, within the {{$d.RetentionDays}}-day retention window.</p></div>
+  <div class="pageactions"><a class="btn secondary" href="/messages?from={{$s.Callsign}}">Messages from</a><a class="btn secondary" href="/messages?to={{$s.Callsign}}">Messages to</a><a class="btn secondary" href="/reports?station={{$s.Callsign}}&amp;group_by=day&amp;run=1">Report</a></div>
+</div>
+<dl class="status">
+  <div class="cell"><dt>Messages sent</dt><dd>{{num $s.Sent}}</dd></div>
+  <div class="cell"><dt>Messages received</dt><dd>{{num $s.Received}}</dd></div>
+  <div class="cell"><dt>Sent today</dt><dd>{{num $s.SentToday}}</dd></div>
+  <div class="cell"><dt>Last heard</dt><dd class="aprs-time"><span>{{date $s.LastAt}}</span><span>{{clock $s.LastAt}}</span></dd></div>
+</dl>
+{{if $s.TopPartners}}
+<div class="strip"><h2>Frequent correspondents</h2><span>direct messages only</span></div>
+{{template "bars" $s.TopPartners}}
+{{end}}
+<div class="strip mt-lg"><h2>Sent messages</h2><span>{{num $d.Page.Total}} from {{$s.Callsign}}</span></div>
+{{if $d.Page.Rows}}
+<div class="scroll"><table class="aprs-table received-table">
+  <thead><tr><th class="time-col">Received (UTC)</th><th class="destination-col">To</th><th class="message-col">Message</th></tr></thead>
+  <tbody>{{range $d.Page.Rows}}<tr><td><a class="rowlink aprs-time" href="/messages/{{.ID}}"><span>{{date .At}}</span><span>{{clock .At}}</span></a></td><td><a class="rowlink" href="/messages/{{.ID}}">{{.To}}</a></td><td class="message-col"><a class="rowlink" href="/messages/{{.ID}}">{{.Text}}</a></td></tr>{{end}}</tbody>
+</table></div>
+{{else}}<p class="muted">This station has sent nothing in the window.</p>{{end}}
+{{template "layout_end" .}}{{end}}

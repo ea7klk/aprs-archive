@@ -1,0 +1,61 @@
+{{define "reports"}}{{template "layout_start" .}}
+{{$d := .Data}}{{$spec := $d.Spec}}
+<div class="pagehead">
+  <div><p class="kicker">Reports</p><h1>Build a report</h1><p class="lede">Counts over a date range, grouped the way you need them. Every report can be downloaded as CSV.</p></div>
+</div>
+
+<form class="filters" method="get" action="/reports">
+  <input type="hidden" name="run" value="1">
+  <div><label for="r-since">From date (UTC)</label><input id="r-since" name="since" type="date" value="{{date $spec.Since}}"></div>
+  <div><label for="r-until">To date (UTC)</label><input id="r-until" name="until" type="date" value="{{date $spec.Until}}"></div>
+  <div><label for="r-group">Group by</label><select id="r-group" name="group_by">{{range $d.Groupings}}<option value="{{.ID}}" {{if eq $spec.GroupBy .ID}}selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div><label for="r-kind">Kind</label><select id="r-kind" name="kind">
+    <option value="" {{if eq $spec.Kind ""}}selected{{end}}>Any</option>
+    <option value="message" {{if eq $spec.Kind "message"}}selected{{end}}>Message</option>
+    <option value="bulletin" {{if eq $spec.Kind "bulletin"}}selected{{end}}>Bulletin</option>
+  </select></div>
+  <div><label for="r-station">Station</label><input id="r-station" name="station" value="{{$spec.Station}}" placeholder="any"></div>
+  <div><label for="r-cat">Bulletin category</label><select id="r-cat" name="category"><option value="">Any</option>{{range $d.Categories}}<option value="{{.ID}}" {{if eq $spec.Category .ID}}selected{{end}}>{{.ID}}</option>{{end}}</select></div>
+  <div><button class="btn" type="submit">Run report</button></div>
+</form>
+
+{{if $d.Ran}}
+<div class="strip mt-lg"><h2>Result</h2><span>{{num $d.Result.Total}} packets · {{date $spec.Since}} → {{date $spec.Until}}</span></div>
+{{if $d.Error}}<div class="error">{{$d.Error}}</div>{{end}}
+{{if $d.Result.Rows}}
+<div class="pageactions mb"><a class="btn" href="/reports/export.csv?{{$d.ExportQuery}}">Download CSV</a></div>
+<div class="scroll">
+<table>
+  <thead><tr>{{range $d.Result.Columns}}<th>{{.}}</th>{{end}}</tr></thead>
+  <tbody>{{range $d.Result.Rows}}<tr><td>{{.Label}}</td><td>{{num .Count}}</td><td>{{pct .Count $d.Result.Total}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{template "bars" $d.Result.Rows}}
+{{else}}<p class="muted">The report is empty for that selection.</p>{{end}}
+
+<div class="strip mt-lg"><h2>Summary</h2></div>
+<dl class="detail-grid">
+  <dt>Window</dt><dd>{{stamp $spec.Since}} → {{stamp $spec.Until}} UTC</dd>
+  <dt>Grouping</dt><dd>{{$spec.GroupBy}}</dd>
+  <dt>Kind</dt><dd>{{if $spec.Kind}}{{$spec.Kind}}{{else}}any{{end}}</dd>
+  <dt>Station</dt><dd>{{if $spec.Station}}{{$spec.Station}}{{else}}any{{end}}</dd>
+  <dt>Category</dt><dd>{{if $spec.Category}}{{$spec.Category}}{{else}}any{{end}}</dd>
+  <dt>Total packets</dt><dd>{{num $d.Result.Total}}</dd>
+</dl>
+{{else}}
+<p class="muted mt">Choose a window and a grouping, then run the report. The range is capped at {{$d.RetentionDays}} days, which is the archive's own retention.</p>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "about_page"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead"><div><p class="kicker">About</p><h1>What this archive is</h1></div></div>
+<div class="cards">
+  <article class="card"><h2>Source</h2><p>APRS-IS, the internet gateway of the Automatic Packet Reporting System. The collector subscribes with a message-only filter, so positions, weather and telemetry never enter the archive.</p></article>
+  <article class="card"><h2>Collector</h2><p>One process, callsign {{$d.Collector}}, receive-only. It never transmits, and it closes the socket's write side after login so it cannot.</p></article>
+  <article class="card"><h2>Storage</h2><p>SQLite on a retained volume. Every message-format packet is stored as heard: sender, addressee, body, kind and the message ID. Bulletins are also kept deduplicated, so a repeated bulletin shows once with a transmission count.</p></article>
+  <article class="card"><h2>Retention</h2><p>{{$d.RetentionDays}} days for messages and bulletins, swept nightly. Nothing older survives the sweep.</p></article>
+  <article class="card"><h2>Access</h2><p>Anonymous and read-only. The archive holds nothing that everyone on the air could not already hear, and the web process opens the database read-only so it cannot alter it.</p></article>
+  <article class="card"><h2>Identity</h2><p>Every message is third-party unmoderated traffic. Callsigns are not verified identities, and a message body says what its sender wanted it to say.</p></article>
+</div>
+{{template "layout_end" .}}{{end}}

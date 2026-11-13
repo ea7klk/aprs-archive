@@ -1,0 +1,54 @@
+{{define "statistics"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Statistics</p><h1>Archive statistics</h1><p class="lede">Traffic over the last {{$d.WindowDays}} days, by {{$d.Granularity}}.</p></div>
+  <div class="pageactions"><a class="btn secondary" href="/statistics?days=1">24 hours</a><a class="btn secondary" href="/statistics?days=7">7 days</a><a class="btn secondary" href="/statistics?days=30">30 days</a><a class="btn secondary" href="/statistics?days=365">1 year</a></div>
+</div>
+
+<dl class="status">
+  <div class="cell"><dt>Total archived</dt><dd>{{num $d.Totals.Messages}}</dd></div>
+  <div class="cell"><dt>Sending stations</dt><dd>{{num $d.Totals.Stations}}</dd></div>
+  <div class="cell"><dt>Addressees</dt><dd>{{num $d.Totals.Recipients}}</dd></div>
+  <div class="cell"><dt>Bulletins</dt><dd>{{num $d.Totals.Bulletins}}</dd></div>
+  <div class="cell"><dt>Database on disk</dt><dd>{{humanBytes $d.DBBytes}}</dd></div>
+</dl>
+
+<div class="strip"><h2>Traffic by {{$d.Granularity}}</h2><span>{{$d.WindowDays}}-day window</span></div>
+{{template "sparkline" $d.Series}}
+{{template "bars" $d.Series}}
+
+<div class="split">
+  <section>
+    <div class="strip"><h2>Packet kinds</h2><span>window</span></div>
+    {{template "bars" $d.Kinds}}
+    <div class="strip mt-lg"><h2>Bulletin groups</h2><span>whole archive</span></div>
+    {{template "bars" $d.Groups}}
+  </section>
+  <aside>
+    <div class="strip"><h2>Busiest senders</h2><span>window</span></div>
+    {{template "bars" $d.Senders}}
+    <div class="strip mt-lg"><h2>Busiest addressees</h2><span>window, stations only</span></div>
+    {{template "bars" $d.Recipients}}
+  </aside>
+</div>
+
+<div class="strip mt-lg"><h2>Bulletins by category</h2><span>whole archive</span></div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Category</th><th>What it holds</th><th>Bulletins</th></tr></thead>
+  <tbody>{{range $d.CategoryRows}}{{if .ID}}<tr><td><a class="rowlink" href="/bulletins?category={{.ID}}">{{.ID}}</a></td><td class="muted">{{.Desc}}</td><td>{{num .Count}}</td></tr>{{end}}{{end}}</tbody>
+</table>
+</div>
+
+<div class="strip mt-lg"><h2>Collector &amp; retention</h2></div>
+<dl class="detail-grid">
+  <dt>Status</dt><dd>{{if $d.Fresh}}<b class="state-ok">writing</b>{{else}}<b class="state-bad">not writing</b>{{end}}</dd>
+  <dt>Last write</dt><dd>{{if $d.Collector.LastWriteAt.IsZero}}never{{else}}{{stamp $d.Collector.LastWriteAt}} UTC ({{ago $d.Collector.LastWriteAt .Now}}){{end}}</dd>
+  <dt>Last connect</dt><dd>{{if $d.Collector.LastConnectAt.IsZero}}never{{else}}{{stamp $d.Collector.LastConnectAt}} UTC{{end}}</dd>
+  <dt>Collector started</dt><dd>{{if $d.Collector.StartedAt.IsZero}}—{{else}}{{stamp $d.Collector.StartedAt}} UTC{{end}}</dd>
+  <dt>Packets stored</dt><dd>{{num $d.Collector.PacketsStored}}</dd>
+  <dt>Connects</dt><dd>{{num $d.Collector.Connects}}</dd>
+  <dt>Last error</dt><dd>{{if $d.Collector.LastError}}<span class="state-bad">{{$d.Collector.LastError}}</span>{{else}}<span class="muted">none</span>{{end}}</dd>
+  <dt>Retention</dt><dd>{{$d.RetentionDays}} days for messages and bulletins</dd>
+</dl>
+{{template "layout_end" .}}{{end}}

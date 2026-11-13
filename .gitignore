@@ -1,0 +1,11 @@
+# Build output
+/build/
+# Local run data (make run-collector writes here)
+/data/
+# Test and coverage artifacts
+coverage.out
+coverage.txt
+coverage.html
+# Editor and OS noise
+.DS_Store
+*.swp

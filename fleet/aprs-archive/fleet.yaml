@@ -1,0 +1,15 @@
+# APRS message archive. Claims, both workloads and the public route.
+#
+# Namespace `aprs` is declared centrally in spainip/infra (fleet/namespaces.yaml,
+# with helm.sh/resource-policy: keep) rather than here: deletion safety lives in
+# one reviewable file. This bundle owns everything inside it.
+#
+# Two Deployments, one PersistentVolumeClaim. The collector is the only writer;
+# the web server opens the database read-only, so a web rollout or a slow report
+# cannot block collection or corrupt the archive. Both pods mount the claim, so
+# both are pinned to the node that owns the local volume.
+defaultNamespace: aprs
+kustomize:
+  dir: .
+helm:
+  takeOwnership: true

@@ -1,0 +1,65 @@
+{{define "layout_start"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{.AppName}}</title>
+  <style>{{style}}</style>
+</head>
+<body>
+<div class="frame">
+<header>
+  <div class="head">
+    <div class="head-main">
+      <div class="logo"><i aria-hidden="true"></i><a class="appname" href="/">{{.AppName}}</a></div>
+      <div class="sub ident">{{.Location}} · Every APRS message heard on APRS-IS · {{.Topic}}</div>
+    </div>
+    <div class="head-meta">
+      <span>Archive retention <b>{{.RetentionLabel}}</b></span>
+      <span>Collector <b>{{.CollectorLabel}}</b></span>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <a href="/" {{if navActive .Nav ""}}aria-current="page"{{end}}>Home</a>
+    <a href="/messages" {{if navActive .Nav "explore"}}aria-current="page"{{end}}>Search &amp; stations</a>
+    <a href="/bulletins" {{if navActive .Nav "bulletins"}}aria-current="page"{{end}}>Bulletins</a>
+    <a href="/statistics" {{if navActive .Nav "statistics"}}aria-current="page"{{end}}>Statistics</a>
+    <a href="/reports" {{if navActive .Nav "reports"}}aria-current="page"{{end}}>Reports</a>
+    <a href="/about" {{if navActive .Nav "about"}}aria-current="page"{{end}}>About</a>
+  </nav>
+</header>
+<main id="main">
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{end}}
+
+{{define "layout_end"}}</main>
+<footer>
+  <div class="foot">
+    <span>{{.AppName}} · v{{.Version}} · APRS-IS message archive</span>
+    <span><a href="/about">About &amp; data</a> · <a href="/statistics">Statistics</a> · <a href="/reports">Reports</a></span>
+  </div>
+</footer>
+</div>
+</body>
+</html>{{end}}
+
+{{define "kindBadge"}}<span class="kind kind-{{.}}">{{.}}</span>{{end}}
+
+{{define "bars"}}{{if .}}<div class="bars">{{$max := maxCount .}}{{range .}}<div class="bar-row"><span class="k" title="{{.Label}}">{{.Label}}</span><span class="v"><i style="width:{{barWidth .Count $max}}"></i></span><span class="n">{{num .Count}}</span></div>{{end}}</div>{{end}}{{end}}
+
+{{define "sparkline"}}{{if .}}<div class="spark">{{$max := maxCount .}}{{range .}}<span style="height:{{sparkHeight .Count $max}}" title="{{.Label}}: {{num .Count}}"></span>{{end}}</div>{{end}}{{end}}
+
+{{/* pager needs the current query string and the page count; callers pass
+     dict "Page" .Page "Query" .Query so the links keep every filter. */}}
+{{define "pager"}}{{$p := .Page}}
+<div class="pagination-bar">
+  <div class="pagination-summary">{{if eq $p.Pages 1}}Page 1 of 1{{else}}Page {{$p.Page}} of {{$p.Pages}}{{end}} · {{num $p.Total}} results</div>
+  {{if gt $p.Pages 1}}
+  <div class="pagination-links">
+    {{if gt $p.Page 1}}<a class="btn secondary small" href="?{{.Query}}&amp;page={{sub $p.Page 1}}">Previous</a>{{end}}
+    {{if lt $p.Page $p.Pages}}<a class="btn secondary small" href="?{{.Query}}&amp;page={{add $p.Page 1}}">Next</a>{{end}}
+  </div>
+  {{end}}
+</div>{{end}}

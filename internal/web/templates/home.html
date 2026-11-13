@@ -1,0 +1,62 @@
+{{define "home"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<section class="hero">
+  <p class="kicker">APRS-IS message archive</p>
+  <h1>Every message, on the record.</h1>
+  <p class="lede">{{.Topic}} Kept for {{.RetentionLabel}}; the collector is {{.CollectorLabel}}.</p>
+  <div class="hero-actions">
+    <a class="btn" href="/messages">Search messages</a>
+    <a class="btn secondary" href="/bulletins">Bulletins</a>
+    <a class="btn secondary" href="/statistics">Statistics</a>
+    <a class="btn secondary" href="/reports">Reports</a>
+  </div>
+</section>
+
+<dl class="status">
+  <div class="cell"><dt>Messages archived</dt><dd>{{num $d.Totals.Messages}}</dd></div>
+  <div class="cell"><dt>Bulletin transmissions</dt><dd>{{num $d.Totals.Bulletins}}</dd></div>
+  <div class="cell"><dt>Sending stations</dt><dd>{{num $d.Totals.Stations}}</dd></div>
+  <div class="cell"><dt>Last 24 hours</dt><dd>{{num $d.Totals.LastHour}}<small class="quiet"> /hour</small></dd></div>
+  <div class="cell"><dt>Archive window</dt><dd>{{date $d.Totals.FirstAt}}<small class="quiet"> → {{date $d.Totals.LastAt}}</small></dd></div>
+</dl>
+
+<div class="strip"><h2>Last 24 hours</h2><span>{{num $d.Totals.Today}} today · collector {{if $d.Fresh}}<b class="state-ok">writing</b>{{else}}<b class="state-bad">not writing</b>{{end}}</span></div>
+{{template "sparkline" $d.Series}}
+{{if $d.Series}}
+<div class="statline">
+  <span>Buckets <b>{{len $d.Series}}</b></span>
+  {{range $d.Kinds}}<span>{{.Label}} <b>{{num .Count}}</b></span>{{end}}
+</div>
+{{end}}
+
+<div class="split">
+  <section>
+    <div class="strip"><h2>Latest messages</h2><a class="btn secondary small" href="/messages">All messages</a></div>
+    <div class="rows">
+      {{range $d.Latest}}<a class="rowlink" href="/messages/{{.ID}}"><span><b>{{.From}} → {{.To}}</b><small>{{.Text}}</small></span><span class="n">{{clock .At}}</span></a>
+      {{else}}<p class="muted">No messages in the archive yet. The collector writes its first batch as soon as traffic arrives.</p>{{end}}
+    </div>
+  </section>
+  <aside>
+    <div class="strip"><h2>Recent bulletins</h2><a class="btn secondary small" href="/bulletins">Reader</a></div>
+    <div class="rows">
+      {{range $d.RecentBulletins}}<a class="rowlink" href="/bulletins/{{.ID}}"><span><b>{{if .Group}}BLN {{.Group}}{{else}}Bulletin{{end}}</b><small>{{.Text}}</small></span><span class="n">×{{.SeenCount}}</span></a>
+      {{else}}<p class="muted">No bulletins yet.</p>{{end}}
+    </div>
+    <div class="strip mt-lg"><h2>Busiest senders (24h)</h2></div>
+    <div class="rows">
+      {{range $d.Senders}}<a class="rowlink" href="/stations/{{.Label}}"><span><b>{{.Label}}</b></span><span class="n">{{num .Count}}</span></a>{{end}}
+    </div>
+  </aside>
+</div>
+{{template "layout_end" .}}{{end}}
+
+{{define "not_found"}}{{template "layout_start" .}}
+<div class="pagehead"><div><p class="kicker">Not found</p><h1>No such record</h1></div><div class="pageactions"><a class="btn secondary" href="/">Home</a></div></div>
+<p class="lede">That message, station or bulletin is not in the archive. It may have passed the {{.RetentionLabel}} retention window, or it may never have been heard.</p>
+{{template "layout_end" .}}{{end}}
+
+{{define "error"}}{{template "layout_start" .}}
+<div class="pagehead"><div><p class="kicker">Error</p><h1>Something went wrong</h1></div><div class="pageactions"><a class="btn secondary" href="/">Home</a></div></div>
+<p class="lede">{{if .Error}}{{.Error}}{{else}}The archive could not answer this request.{{end}}</p>
+{{template "layout_end" .}}{{end}}
