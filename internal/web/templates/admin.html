@@ -1,0 +1,74 @@
+{{define "admin_login"}}{{template "layout_start" .}}
+<div class="pagehead">
+  <div><p class="kicker">Admin</p><h1>Sign in</h1><p class="lede">The exception list decides which callsigns the collector keeps or drops. Access is one shared password, configured by the deployment.</p></div>
+</div>
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{if not .Error}}
+<form class="stack" method="post" action="/admin/login">
+  <div><label for="a-pass">Password</label><input id="a-pass" name="password" type="password" autocomplete="current-password" required autofocus></div>
+  <div class="row"><button class="btn" type="submit">Sign in</button></div>
+</form>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
+{{define "admin"}}{{template "layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Admin</p><h1>Exception list</h1><p class="lede">The collector stores a message only if both the sender and the recipient pass callsign validation. An exception overrides that decision for one callsign, in either direction.</p></div>
+  <div class="pageactions">
+    <form method="post" action="/admin/prefixes/refresh"><button class="btn secondary" type="submit">Refresh prefix list</button></form>
+    <form method="post" action="/admin/logout"><button class="btn secondary" type="submit">Sign out</button></form>
+  </div>
+</div>
+
+{{if $d.Flash}}<div class="flash">{{$d.Flash}}</div>{{end}}
+
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+<div class="strip"><h2>Prefix dataset</h2><span>what validation is based on</span></div>
+<dl class="detail-grid">
+  <dt>Source</dt><dd class="pre">{{$d.PrefixSource}}</dd>
+  <dt>Prefixes</dt><dd>{{num (int64 $d.PrefixCount)}}</dd>
+  <dt>Loaded</dt><dd>{{if $d.PrefixFetched.IsZero}}never{{else}}{{stamp $d.PrefixFetched}} UTC ({{ago $d.PrefixFetched .Now}}){{end}}</dd>
+  <dt>Last error</dt><dd>{{if $d.PrefixRefresh}}<span class="state-bad">{{$d.PrefixRefresh}}</span>{{else}}<span class="muted">none</span>{{end}}</dd>
+</dl>
+<p class="quiet mt-sm">A callsign is valid when its base contains a digit and begins with a prefix from this dataset. Everything else — <span class="accent">WXBOT</span>, <span class="accent">ANSRVR</span>, <span class="accent">MYANET</span> — is treated as a bot or software group.</p>
+
+<div class="strip mt-lg"><h2>Exceptions</h2><span>{{len $d.Exceptions}} callsigns</span></div>
+{{if $d.Exceptions}}
+<div class="scroll">
+<table class="tbl-pairs">
+  <thead><tr><th>Callsign</th><th>Decision</th><th>Note</th><th>Updated</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Exceptions}}
+    <tr>
+      <td><strong>{{.Callsign}}</strong></td>
+      <td>{{if .Valid}}<span class="kind kind-message">keep</span>{{else}}<span class="kind kind-bulletin">drop</span>{{end}}</td>
+      <td>{{if .Note}}{{.Note}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="metaline">{{stamp .UpdatedAt}}</td>
+      <td>
+        <form method="post" action="/admin/exceptions/delete/{{.Callsign}}">
+          <button class="btn danger small" type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted mt">No exceptions. Every callsign is judged by the prefix dataset alone.</p>
+{{end}}
+
+<div class="strip mt-lg"><h2>Add or change an exception</h2></div>
+<form class="filters" method="post" action="/admin/exceptions">
+  <div><label for="a-call">Callsign</label><input id="a-call" name="callsign" placeholder="APRSPH" required maxlength="24"></div>
+  <div><label for="a-valid">Decision</label><select id="a-valid" name="valid">
+    <option value="true">keep — store its messages</option>
+    <option value="false">drop — never store its messages</option>
+  </select></div>
+  <div><label for="a-note">Note</label><input id="a-note" name="note" placeholder="why"></div>
+  <div><button class="btn" type="submit">Save</button></div>
+</form>
+<p class="quiet mt-sm">Saving replaces any existing decision for that callsign. The collector reloads the list within a minute, so a new decision takes effect without a restart. Removals go back to prefix validation, not to "keep".</p>
+{{template "layout_end" .}}{{end}}

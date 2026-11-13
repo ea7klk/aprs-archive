@@ -32,7 +32,7 @@ import (
 )
 
 // SchemaVersion is bumped whenever schema.sql changes in a way that needs code.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // DSN for the writing process.
 //
@@ -79,6 +79,38 @@ func OpenWriter(path string) (*sql.DB, error) {
 	if err := migrate(ctx, db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	return db, nil
+}
+
+// OpenAdminWriter opens the archive read-write for the admin deployment.
+//
+// This exists for exactly one caller: the separate `aprs-admin` web server,
+// which owns the exception list. The public web server keeps opening the archive
+// read-only and must stay that way — it serves third-party traffic to anonymous
+// visitors, and a read-only handle is one of the guarantees that makes that
+// safe.
+//
+// The handle commits each statement immediately; it must not hold a write
+// transaction open, or it would block the collector's batching.
+func OpenAdminWriter(path string) (*sql.DB, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("open archive for admin: %w", err)
+	}
+	db, err := sql.Open("sqlite", writeDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("open archive for admin: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read schema version: %w", err)
+	}
+	if version < SchemaVersion {
+		db.Close()
+		return nil, fmt.Errorf("archive schema is version %d, this build expects %d: let the collector migrate it first", version, SchemaVersion)
 	}
 	return db, nil
 }

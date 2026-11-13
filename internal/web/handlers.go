@@ -191,6 +191,14 @@ type ReportSpec struct {
 	Category  string
 }
 
+// ReportRowLimit bounds the rows any report returns.
+//
+// A report is a summary, not an export: the CSV exists for the full set, and a
+// grouping with a million distinct values (stations over a year) would either
+// time out or produce a page nobody can read. The limit is applied in SQL so
+// the cost is bounded too, not just the output.
+const ReportRowLimit = 100
+
 // ValidGroupings are the report groupings offered.
 var ValidGroupings = []struct {
 	ID    string
@@ -290,6 +298,8 @@ type ReportResult struct {
 	Rows    []store.Bucket
 	Total   int64
 	Columns []string
+	// Truncated is set when the grouping had more rows than ReportRowLimit.
+	Truncated bool
 }
 
 // Run computes the report. The grouping is chosen from a fixed list and turned
@@ -323,16 +333,16 @@ func (s *Server) Run(ctx context.Context, spec ReportSpec) (ReportResult, error)
 			step = 86400
 		}
 		query = fmt.Sprintf(`SELECT received_at / %d AS bucket, COUNT(*) AS n, MIN(received_at) AS first_at
-			FROM messages WHERE %s GROUP BY bucket ORDER BY bucket`, step, clause)
+			FROM messages WHERE %s GROUP BY bucket ORDER BY bucket LIMIT %d`, step, clause, ReportRowLimit)
 	case "station":
 		query = fmt.Sprintf(`SELECT from_callsign, COUNT(*) AS n, MIN(received_at) AS first_at
-			FROM messages WHERE %s GROUP BY from_callsign ORDER BY n DESC, from_callsign ASC LIMIT 500`, clause)
+			FROM messages WHERE %s GROUP BY from_callsign ORDER BY n DESC, from_callsign ASC LIMIT %d`, clause, ReportRowLimit)
 	case "kind":
 		query = fmt.Sprintf(`SELECT kind, COUNT(*) AS n, MIN(received_at) AS first_at
-			FROM messages WHERE %s GROUP BY kind ORDER BY n DESC`, clause)
+			FROM messages WHERE %s GROUP BY kind ORDER BY n DESC LIMIT %d`, clause, ReportRowLimit)
 	case "category":
 		query = fmt.Sprintf(`SELECT CASE WHEN category = '' THEN '(none)' ELSE category END, COUNT(*) AS n, MIN(received_at) AS first_at
-			FROM messages WHERE %s GROUP BY category ORDER BY n DESC`, clause)
+			FROM messages WHERE %s GROUP BY category ORDER BY n DESC LIMIT %d`, clause, ReportRowLimit)
 	default:
 		return ReportResult{}, fmt.Errorf("unknown grouping %q", spec.GroupBy)
 	}
@@ -374,6 +384,7 @@ func (s *Server) Run(ctx context.Context, spec ReportSpec) (ReportResult, error)
 		return result, err
 	}
 	result.Columns = []string{groupingLabel(spec.GroupBy), "Packets", "Share"}
+	result.Truncated = len(result.Rows) >= ReportRowLimit
 	return result, nil
 }
 

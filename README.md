@@ -85,6 +85,56 @@ Web:
 | `APRS_ARCHIVE_RETENTION_DAYS` | `365` | Shown to visitors; caps report ranges |
 | `APRS_ARCHIVE_COLLECTOR_STALE_MINUTES` | `15` | When the header says "idle" |
 | `APRS_ARCHIVE_REPORT_MAX_DAYS` | `92` | Longest window one report may scan (three months) |
+| `APRS_ARCHIVE_ROLE` | `public` | `admin` gives the server a write handle and the admin routes |
+| `APRS_ARCHIVE_ADMIN_PASSWORD` | — | Admin page password; empty disables the page |
+
+## Callsign validation
+
+The collector stores a message only if **both** the sender and the recipient
+look like real amateur stations. A callsign qualifies when its base contains a
+digit and begins with a prefix from the world-wide prefix list published at
+<https://www.country-files.com/cty/cty.csv>, refreshed daily. That rejects
+`WXBOT`, `ANSRVR`, `MYANET` and the rest of the machine traffic, and accepts
+`EA7KLK-9`, `IZ6RND` and `KH6ABC`.
+
+Prefix validation cannot tell a station from a robot that named itself like one,
+so the operator maintains an **exception list** on the admin page. It is checked
+before the prefix list and wins in both directions. `APRSPH` is seeded as a
+standing exception.
+
+## Admin
+
+A second deployment serves <https://aprs-admin.ea7klk.es> from the same image
+with `APRS_ARCHIVE_ROLE=admin`. Only that deployment holds a read-write handle
+and registers the admin routes; the public server keeps its read-only mount, its
+read-only database handle and no admin code path at all.
+
+The password comes from Secret **`aprs-archive-admin`**, key `password`. To
+change it:
+
+```sh
+kubectl -n aprs create secret generic aprs-archive-admin \
+  --from-literal=password='new-password' \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n aprs rollout restart deploy/aprs-archive-admin
+```
+
+The session token is derived from the password, so changing it ends every
+existing admin session.
+
+## Removing bot traffic already stored
+
+Validation applies to what arrives, not to what is already in the archive. To
+purge existing rows in one pass, run the collector once with the flag set:
+
+```sh
+kubectl -n aprs set env deploy/aprs-archive-collector APRS_ARCHIVE_PURGE_BOTS=1
+# wait for the "purge removed N messages" log line, then:
+kubectl -n aprs set env deploy/aprs-archive-collector APRS_ARCHIVE_PURGE_BOTS-
+```
+
+It uses the same predicate as collection, so the cleanup and the collector
+cannot disagree.
 
 ## Deployment
 

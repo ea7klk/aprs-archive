@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -469,5 +470,50 @@ func TestReportDatePickerCannotOfferATooEarlyStart(t *testing.T) {
 	}
 	if !strings.Contains(body, "at most 92 days") {
 		t.Fatal("the page does not state the reporting limit")
+	}
+}
+
+// ---- row limit ----
+
+func TestReportReturnsAtMostOneHundredRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	db, err := store.OpenWriter(path)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	ctx := context.Background()
+	w, err := store.NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	now := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	// 150 distinct senders, so the station grouping has more rows than the cap.
+	for i := 0; i < 150; i++ {
+		p := aprs.Packet{From: fmt.Sprintf("EA7%03d", i), To: "N0CALL", Text: "x", Kind: aprs.KindMessage}
+		if err := w.Record(ctx, p, now); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	if err := w.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reader, err := store.OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer reader.Close()
+	db.Close()
+	srv, err := New(Config{DBPath: path, AppName: "APRS Archive", Version: "test",
+		RetentionDays: 365, ReportMaxDays: 92, CollectorStaleFor: time.Minute,
+		Now: func() time.Time { return now }}, reader)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	body := get(t, srv.Handler(), "/reports?run=1&group_by=station&since=2026-11-13&until=2026-11-13").Body.String()
+	if n := strings.Count(body, "<tr>"); n > ReportRowLimit+1 {
+		t.Fatalf("%d table rows rendered, want at most %d (+header)", n, ReportRowLimit)
+	}
+	if !strings.Contains(body, "Showing the first 100 rows") {
+		t.Fatal("truncation is not announced")
 	}
 }

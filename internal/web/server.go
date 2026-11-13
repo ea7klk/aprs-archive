@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"aprs-archive/internal/aprs"
+	"aprs-archive/internal/prefixes"
 	"aprs-archive/internal/store"
 )
 
@@ -34,7 +35,16 @@ type Config struct {
 	// this is how much of it one query may scan. A 30-day window over a
 	// year of traffic is a cheap index range on (kind, received_at); unbound,
 	// the same query walks ten million rows.
-	ReportMaxDays     int
+	ReportMaxDays int
+	// AdminPassword protects the callsign exception page. Empty disables it:
+	// a write surface with no lock is worse than no surface.
+	AdminPassword string
+	// AdminDBPath is set only by the admin deployment, which opens the archive
+	// read-write to maintain the exception list. The public deployment leaves
+	// it empty and therefore cannot write at all.
+	AdminDBPath string
+	// PrefixSource is the callsign prefix dataset the admin page refreshes.
+	PrefixSource      string
 	CollectorStaleFor time.Duration
 	// Now is injectable so tests can pin the clock.
 	Now func() time.Time
@@ -45,6 +55,14 @@ type Server struct {
 	cfg Config
 	db  *sql.DB
 	tpl *template.Template
+	// adminDB is the read-write handle held only by the admin deployment.
+	adminDB *sql.DB
+	// readOnly records which deployment this is. The public server is
+	// read-only by construction and registers no admin route at all.
+	readOnly bool
+	// prefixFetcher keeps the callsign prefix list current for the admin page.
+	prefixFetcher *prefixes.Fetcher
+	admin         *admin
 }
 
 // New builds the server.
@@ -66,7 +84,21 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 	if cfg.ReportMaxDays > cfg.RetentionDays {
 		cfg.ReportMaxDays = cfg.RetentionDays
 	}
-	s := &Server{cfg: cfg, db: db}
+	s := &Server{cfg: cfg, db: db, prefixFetcher: prefixes.NewFetcher(), readOnly: true}
+	// Only the admin deployment supplies a write handle. Everything else about
+	// this binary is identical, so the public server has no admin routes at all.
+	if cfg.AdminDBPath != "" {
+		adminDB, err := store.OpenAdminWriter(cfg.AdminDBPath)
+		if err != nil {
+			return nil, fmt.Errorf("open admin database: %w", err)
+		}
+		s.adminDB = adminDB
+		s.readOnly = false
+	}
+	if cfg.PrefixSource != "" {
+		s.prefixFetcher.URL = cfg.PrefixSource
+	}
+	s.admin = newAdmin(cfg, s.adminDB, s.prefixFetcher)
 	tpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -92,6 +124,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /reports/export.csv", s.reportCSV)
 	mux.HandleFunc("GET /about", s.about)
 	mux.HandleFunc("GET /healthz", s.health)
+
+	// Admin routes exist only on the deployment that holds a write handle.
+	// Registering them on the public server and refusing inside the handler
+	// would leave a surface whose safety depended on every future edit
+	// remembering the check; not registering them means the public server has
+	// no admin code path at all.
+	if !s.readOnly {
+		mux.HandleFunc("GET /admin", s.adminPage)
+		mux.HandleFunc("GET /admin/login", s.adminLogin)
+		mux.HandleFunc("POST /admin/login", s.adminLoginPost)
+		mux.HandleFunc("POST /admin/logout", s.adminLogout)
+		mux.HandleFunc("POST /admin/exceptions", s.adminAddException)
+		mux.HandleFunc("POST /admin/exceptions/delete/{callsign}", s.adminDeleteException)
+		mux.HandleFunc("POST /admin/prefixes/refresh", s.adminRefreshPrefixes)
+	}
 
 	return securityHeaders(mux)
 }

@@ -70,7 +70,19 @@ full suite before every commit.
 8. **Never transmit to APRS-IS.** The collector writes one login line and
    nothing else. Half-closing the socket is not an option: APRS-IS treats it as
    a dead client and drops the session immediately (observed 2026-11-13).
-9. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
+9. **The public server is read-only; the admin server is a separate deployment.**
+   Same image, `APRS_ARCHIVE_ROLE=admin` gives a write handle. The public server
+   must keep: a read-only volume mount, a `mode=ro` handle, and **no admin
+   routes registered at all**. Do not register an admin route and refuse inside
+   the handler — that is a surface, and its safety then depends on every future
+   edit. `TestPublicServerHasNoAdminRoutes` and `TestPublicServerCannotWrite`
+   pin both halves.
+10. **Validation is bidirectional and exceptions beat it.** A message is stored
+   only if both endpoints pass. The exception list is consulted first and wins
+   in both directions, so a "drop" entry works for a station that prefixes would
+   accept. Exceptions are reloaded every minute, so the admin page takes effect
+   without a restart.
+11. **Fleet pins digests.** `fleet/aprs-archive/resources.yaml` must reference the
    image by `@sha256:`; a tag would be reverted by drift correction.
 
 ## Visual language

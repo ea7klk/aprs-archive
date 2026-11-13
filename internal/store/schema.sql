@@ -68,3 +68,17 @@ CREATE TABLE IF NOT EXISTS collector_state (
     connects       INTEGER NOT NULL DEFAULT 0,
     last_error     TEXT    NOT NULL DEFAULT ''
 );
+
+-- Callsigns an operator has forced valid or invalid.
+--
+-- Prefix validation cannot tell a station from a robot that named itself like
+-- one, and it cannot know that a particular gateway is wanted. `valid = 1`
+-- keeps a callsign the prefix list would reject (APRSPH is the standing
+-- example); `valid = 0` rejects one it would accept. The collector consults
+-- this before the prefix list, so an override always wins.
+CREATE TABLE IF NOT EXISTS callsign_exceptions (
+    callsign  TEXT PRIMARY KEY COLLATE NOCASE,
+    valid     INTEGER NOT NULL CHECK (valid IN (0, 1)),
+    note      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);

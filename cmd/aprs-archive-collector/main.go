@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"aprs-archive/internal/aprs"
+	"aprs-archive/internal/prefixes"
 	"aprs-archive/internal/store"
 )
 
@@ -103,6 +104,43 @@ func run() error {
 	// The flush loop is separate from the read loop on purpose: a slow disk or
 	// a busy database must apply backpressure through the batch size, not stall
 	// the socket long enough for the server to time us out.
+	// Callsign validation. The prefix list is loaded before the listener starts:
+	// a collector that begins storing before it can tell a station from a bot
+	// would fill the archive with the very traffic this is here to exclude.
+	fetcher := prefixes.NewFetcher()
+	fetcher.URL = env("APRS_ARCHIVE_PREFIX_SOURCE", prefixes.DefaultSource)
+	listRefresh, _ := strconv.Atoi(env("APRS_ARCHIVE_PREFIX_REFRESH_HOURS", "24"))
+	fetcher.MaxAge = time.Duration(listRefresh) * time.Hour
+	if err := fetcher.Refresh(ctx); err != nil {
+		log.Printf("prefix list unavailable at startup, retrying in the background: %v", err)
+	} else if set, _ := fetcher.Snapshot(); set != nil {
+		log.Printf("prefix list loaded: %d prefixes from %s", set.Count, fetcher.URL)
+	}
+	checker := newValidator(ctx, db, fetcher)
+
+	// Seed the standing exception if the operator has not set one: APRSPH is a
+	// bot the archive wants, and having to remember that after every wipe is
+	// the kind of detail that gets forgotten.
+	if err := seedDefaultExceptions(ctx, db); err != nil {
+		log.Printf("could not seed default callsign exceptions: %v", err)
+	}
+
+	// One-off repair: rows stored before callsign validation existed include a
+	// large amount of bot traffic. The collector owns the predicate, so it does
+	// the cleanup — and only when asked, because it walks the whole archive.
+	if env("APRS_ARCHIVE_PURGE_BOTS", "") == "1" {
+		log.Printf("purging stored messages from or to non-station callsigns")
+		start := time.Now()
+		removed, err := store.PurgeInvalidCallsigns(ctx, db, checker.allow)
+		if err != nil {
+			log.Printf("purge: %v", err)
+		} else {
+			log.Printf("purge removed %d messages in %s", removed, time.Since(start).Round(time.Second))
+		}
+	}
+
+	go checker.refreshLoop(ctx, time.Duration(listRefresh)*time.Hour, time.Minute)
+
 	// The assembler holds the parts of multi-part messages until the set is
 	// complete. Each part is also stored immediately, so a set whose last part
 	// never arrives still leaves its content in the archive.
@@ -116,6 +154,12 @@ func run() error {
 		// are classified by the parser and dropped here, which keeps the parser
 		// an honest description of the protocol.
 		if p.Kind == aprs.KindAck || p.Kind == aprs.KindRej {
+			return
+		}
+		// Bot traffic, in both directions: a message from a machine is its
+		// output, and a message to a machine is a command. Neither is an
+		// amateur operator's conversation.
+		if !checker.Keep(p.From, p.To) {
 			return
 		}
 		partID, err := writer.RecordPacket(ctx, p, at)

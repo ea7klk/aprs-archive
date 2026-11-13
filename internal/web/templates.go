@@ -86,7 +86,8 @@ func parseTemplates() (*template.Template, error) {
 				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 			}
 		},
-		"num": func(n int64) string { return groupDigits(n) },
+		"num":   func(n int64) string { return groupDigits(n) },
+		"int64": func(n int) int64 { return int64(n) },
 		"pct": func(part, total int64) string {
 			if total == 0 {
 				return "0%"
