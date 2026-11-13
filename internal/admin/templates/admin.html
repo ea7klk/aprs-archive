@@ -27,7 +27,7 @@
 
 <div class="strip"><h2>Prefix dataset</h2><span>what validation is based on</span></div>
 <dl class="detail-grid">
-  <dt>Source</dt><dd class="pre">{{$d.PrefixSource}}</dd>
+  <dt>Source</dt><dd class="pre">{{$d.Source}}</dd>
   <dt>Prefixes</dt><dd>{{num (int64 $d.PrefixCount)}}</dd>
   <dt>Loaded</dt><dd>{{if $d.PrefixFetched.IsZero}}never{{else}}{{stamp $d.PrefixFetched}} UTC ({{ago $d.PrefixFetched .Now}}){{end}}</dd>
   <dt>Last error</dt><dd>{{if $d.PrefixRefresh}}<span class="state-bad">{{$d.PrefixRefresh}}</span>{{else}}<span class="muted">none</span>{{end}}</dd>

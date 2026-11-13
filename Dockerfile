@@ -1,4 +1,6 @@
-# Two stages: a static build, then a small runtime image.
+# One image, three binaries: the collector, the public web server and the admin
+# server. They are separate programs with separate route tables; the image
+# carries all three so one release ships all of them together.
 #
 # CGO is off, which matters: the SQLite driver is modernc.org/sqlite, a pure-Go
 # translation of SQLite. That removes libc and the cgo toolchain from the
@@ -19,7 +21,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
       -o /out/aprs-archive-collector ./cmd/aprs-archive-collector \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath \
       -ldflags="-s -w -X main.version=${VERSION}" \
-      -o /out/aprs-archive-web ./cmd/aprs-archive-web
+      -o /out/aprs-archive-web ./cmd/aprs-archive-web \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags="-s -w -X main.version=${VERSION}" \
+      -o /out/aprs-archive-admin ./cmd/aprs-archive-admin
 
 FROM alpine:3.21
 
@@ -30,7 +35,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S -g 10001 aprsarchive \
     && adduser -S -u 10001 -G aprsarchive -H -s /sbin/nologin aprsarchive
 
-COPY --from=build /out/aprs-archive-collector /out/aprs-archive-web /usr/local/bin/
+COPY --from=build /out/aprs-archive-collector /out/aprs-archive-web /out/aprs-archive-admin /usr/local/bin/
 
 ENV APRS_ARCHIVE_DB=/var/lib/aprs-archive/archive.db
 

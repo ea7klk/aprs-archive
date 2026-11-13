@@ -70,7 +70,12 @@ full suite before every commit.
 8. **Never transmit to APRS-IS.** The collector writes one login line and
    nothing else. Half-closing the socket is not an option: APRS-IS treats it as
    a dead client and drops the session immediately (observed 2026-11-13).
-9. **The public server is read-only; the admin server is a separate deployment.**
+9. **The public server is read-only; the admin server is a separate binary.**
+   `internal/web` (public) and `internal/admin` are separate packages with
+   separate route tables; `cmd/aprs-archive-web` does not import the admin
+   package. A new admin route belongs in `internal/admin`; a new public route
+   in `internal/web`. Never reintroduce a shared router or a role flag — that is
+   exactly how the admin hostname came to serve the public site.
    Same image, `APRS_ARCHIVE_ROLE=admin` gives a write handle. The public server
    must keep: a read-only volume mount, a `mode=ro` handle, and **no admin
    routes registered at all**. Do not register an admin route and refuse inside

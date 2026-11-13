@@ -104,10 +104,16 @@ standing exception.
 
 ## Admin
 
-A second deployment serves <https://aprs-admin.ea7klk.es> from the same image
-with `APRS_ARCHIVE_ROLE=admin`. Only that deployment holds a read-write handle
-and registers the admin routes; the public server keeps its read-only mount, its
-read-only database handle and no admin code path at all.
+Administration is a **separate binary** in the same image:
+
+| Binary | Host | Handle | Serves |
+| --- | --- | --- | --- |
+| `aprs-archive-web` | aprs.ea7klk.es | read-only | the archive, anonymously |
+| `aprs-archive-admin` | aprs-admin.ea7klk.es | read-write | exceptions, maintenance, SQL |
+
+They share no route table and no templates. The public binary does not link the
+admin package at all, so an admin route cannot appear on the public host — that
+is a property of the build, not a conditional to remember.
 
 The password comes from Secret **`aprs-archive-admin`**, key `password`. To
 change it:
@@ -134,6 +140,9 @@ operations an operator actually needs:
   collector writes; keeps the newest 7 and downloads as a file.
 - **Delete before a date** — apply retention immediately. A future date is
   refused, because it would delete the archive.
+- **SQL console** — full SQLite: arbitrary statements, one at a time, 500 rows
+  rendered, 30-second timeout, plus a schema browser with per-object definitions
+  and previews. There is no undo; take a backup first.
 
 Every write form carries a confirmation token derived from the admin password,
 so a cross-site POST cannot trigger a maintenance action and a browser replaying

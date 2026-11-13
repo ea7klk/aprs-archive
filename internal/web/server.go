@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"aprs-archive/internal/aprs"
-	"aprs-archive/internal/prefixes"
 	"aprs-archive/internal/store"
 )
 
@@ -36,15 +35,6 @@ type Config struct {
 	// year of traffic is a cheap index range on (kind, received_at); unbound,
 	// the same query walks ten million rows.
 	ReportMaxDays int
-	// AdminPassword protects the callsign exception page. Empty disables it:
-	// a write surface with no lock is worse than no surface.
-	AdminPassword string
-	// AdminDBPath is set only by the admin deployment, which opens the archive
-	// read-write to maintain the exception list. The public deployment leaves
-	// it empty and therefore cannot write at all.
-	AdminDBPath string
-	// PrefixSource is the callsign prefix dataset the admin page refreshes.
-	PrefixSource string
 	// BackupKeep is how many snapshots the admin page retains. An unbounded
 	// backup directory fills the claim and stops collection.
 	BackupKeep        int
@@ -58,14 +48,6 @@ type Server struct {
 	cfg Config
 	db  *sql.DB
 	tpl *template.Template
-	// adminDB is the read-write handle held only by the admin deployment.
-	adminDB *sql.DB
-	// readOnly records which deployment this is. The public server is
-	// read-only by construction and registers no admin route at all.
-	readOnly bool
-	// prefixFetcher keeps the callsign prefix list current for the admin page.
-	prefixFetcher *prefixes.Fetcher
-	admin         *admin
 }
 
 // New builds the server.
@@ -82,29 +64,12 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 	if cfg.ReportMaxDays <= 0 {
 		cfg.ReportMaxDays = 92
 	}
-	if cfg.BackupKeep <= 0 {
-		cfg.BackupKeep = 7
-	}
 	// A report limit above the retention period would promise history the
 	// archive no longer holds; the smaller of the two wins.
 	if cfg.ReportMaxDays > cfg.RetentionDays {
 		cfg.ReportMaxDays = cfg.RetentionDays
 	}
-	s := &Server{cfg: cfg, db: db, prefixFetcher: prefixes.NewFetcher(), readOnly: true}
-	// Only the admin deployment supplies a write handle. Everything else about
-	// this binary is identical, so the public server has no admin routes at all.
-	if cfg.AdminDBPath != "" {
-		adminDB, err := store.OpenAdminWriter(cfg.AdminDBPath)
-		if err != nil {
-			return nil, fmt.Errorf("open admin database: %w", err)
-		}
-		s.adminDB = adminDB
-		s.readOnly = false
-	}
-	if cfg.PrefixSource != "" {
-		s.prefixFetcher.URL = cfg.PrefixSource
-	}
-	s.admin = newAdmin(cfg, s.adminDB, s.prefixFetcher)
+	s := &Server{cfg: cfg, db: db}
 	tpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -114,28 +79,16 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 }
 
 // Handler returns the routed, middleware-wrapped handler.
-// Handler returns the routes this deployment serves.
+// Handler returns the public archive's routes.
 //
-// The two deployments are different applications that share a binary:
-//
-//   - the public server serves the archive and has no admin code path;
-//   - the admin server serves administration and nothing else.
-//
-// They were previously one route table with the admin half conditional, which
-// meant the admin hostname also served the public site at "/" — an operator
-// typing the admin URL landed on a visitor page and had to know the /admin
-// prefix. A hostname should be the application it names. Registering the other
-// deployment's routes and refusing them would still leave them reachable code;
-// not registering them at all is the guarantee.
+// There is no admin route table in this package at all. Administration is a
+// separate binary (cmd/aprs-archive-admin) serving a separate hostname, so "the
+// public host has no admin path" is a property of the build rather than a
+// conditional that every future edit has to remember.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-
-	if s.readOnly {
-		s.publicRoutes(mux)
-	} else {
-		s.adminRoutes(mux)
-	}
+	s.publicRoutes(mux)
 	return securityHeaders(mux)
 }
 
@@ -153,44 +106,6 @@ func (s *Server) publicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /reports/data", s.reportData)
 	mux.HandleFunc("GET /reports/export.csv", s.reportCSV)
 	mux.HandleFunc("GET /about", s.about)
-}
-
-// adminRoutes is the exception list and archive maintenance.
-//
-// Everything except the login page and the health endpoint needs a session; the
-// write forms additionally carry a confirmation token.
-func (s *Server) adminRoutes(mux *http.ServeMux) {
-	// The admin application's front page is its own content. Without this the
-	// hostname answers "/" with a 404 once the public routes are gone, which
-	// reads as a broken deployment to anyone who types the bare URL.
-	mux.HandleFunc("GET /{$}", s.adminRoot)
-
-	mux.HandleFunc("GET /admin", s.adminPage)
-	mux.HandleFunc("GET /admin/login", s.adminLogin)
-	mux.HandleFunc("POST /admin/login", s.adminLoginPost)
-	mux.HandleFunc("POST /admin/logout", s.adminLogout)
-	mux.HandleFunc("POST /admin/exceptions", s.adminAddException)
-	mux.HandleFunc("POST /admin/exceptions/delete/{callsign}", s.adminDeleteException)
-	mux.HandleFunc("POST /admin/prefixes/refresh", s.adminRefreshPrefixes)
-
-	mux.HandleFunc("GET /admin/database", s.adminDatabase)
-	mux.HandleFunc("POST /admin/database/checkpoint", s.adminCheckpoint)
-	mux.HandleFunc("POST /admin/database/vacuum", s.adminVacuum)
-	mux.HandleFunc("POST /admin/database/reindex", s.adminReindex)
-	mux.HandleFunc("POST /admin/database/backup", s.adminBackup)
-	mux.HandleFunc("GET /admin/database/backup/{name}", s.adminDownloadBackup)
-	mux.HandleFunc("POST /admin/database/backup/{name}/delete", s.adminDeleteBackup)
-	mux.HandleFunc("POST /admin/database/delete-before", s.adminDeleteBefore)
-
-	// The trailing-slash form is what a person types. A signed-in operator goes
-	// to the list; everyone else goes to the login page.
-	mux.HandleFunc("GET /admin/{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
-	})
-	// Any other path is not part of this application.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		s.adminNotFound(w, r)
-	})
 }
 
 // viewData is what every template receives.

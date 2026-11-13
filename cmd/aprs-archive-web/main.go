@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"aprs-archive/internal/prefixes"
 	"aprs-archive/internal/store"
 	"aprs-archive/internal/web"
 )
@@ -45,15 +44,6 @@ func run() error {
 		Version:   version,
 		Collector: env("APRS_ARCHIVE_COLLECTOR_CALLSIGN", "EA7KLK-15"),
 	}
-	// One binary, two deployments. The public server sets neither of these:
-	// it opens the archive read-only and has no admin routes. The admin
-	// deployment sets both, gets a write handle, and is published on its own
-	// hostname.
-	cfg.AdminPassword = os.Getenv("APRS_ARCHIVE_ADMIN_PASSWORD")
-	if env("APRS_ARCHIVE_ROLE", "public") == "admin" {
-		cfg.AdminDBPath = cfg.DBPath
-	}
-	cfg.PrefixSource = env("APRS_ARCHIVE_PREFIX_SOURCE", prefixes.DefaultSource)
 	retentionDays, _ := strconv.Atoi(env("APRS_ARCHIVE_RETENTION_DAYS", "365"))
 	cfg.RetentionDays = retentionDays
 	// Three months. The archive keeps a year, but a report scans a window, and

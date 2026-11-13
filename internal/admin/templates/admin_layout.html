@@ -27,6 +27,7 @@
   <nav class="tabs" aria-label="Admin sections">
     <a href="/admin" {{if not .AdminNav}}aria-current="page"{{end}}>Exceptions</a>
     <a href="/admin/database" {{if .AdminNav}}aria-current="page"{{end}}>Database</a>
+    <a href="/admin/sql" {{if .SQLNav}}aria-current="page"{{end}}>SQL</a>
     <form method="post" action="/admin/logout" class="push"><button class="link" type="submit">Sign out</button></form>
   </nav>
   {{end}}

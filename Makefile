@@ -8,6 +8,7 @@ IMAGE ?= ghcr.io/ea7klk/aprs-archive
 build:
 	go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o build/aprs-archive-collector ./cmd/aprs-archive-collector
 	go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o build/aprs-archive-web ./cmd/aprs-archive-web
+	go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o build/aprs-archive-admin ./cmd/aprs-archive-admin
 
 test:
 	go test ./...
@@ -33,6 +34,13 @@ run-web:
 	APRS_ARCHIVE_DB=$(CURDIR)/data/archive.db \
 	APRS_ARCHIVE_ADDR=:8080 \
 	go run ./cmd/aprs-archive-web
+
+# The admin server needs a password and its own port; it writes the archive.
+run-admin:
+	APRS_ARCHIVE_DB=$(CURDIR)/data/archive.db \
+	APRS_ARCHIVE_ADDR=:8082 \
+	APRS_ARCHIVE_ADMIN_PASSWORD=$${ADMIN_PASSWORD:-devpassword} \
+	go run ./cmd/aprs-archive-admin
 
 docker:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .

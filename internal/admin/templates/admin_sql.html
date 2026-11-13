@@ -1,0 +1,53 @@
+{{define "admin_sql"}}{{template "admin_layout_start" .}}
+{{$d := .Data}}{{$r := $d.Result}}
+<div class="pagehead">
+  <div><p class="kicker">Admin</p><h1>SQL console</h1><p class="lede">Full SQLite over the archive. One statement at a time, {{$d.Limit}} rows rendered, 30-second timeout. There is no undo; take a backup before a statement that changes something.</p></div>
+  <div class="pageactions"><a class="btn secondary" href="/admin/database">Database</a></div>
+</div>
+
+{{if $d.Flash}}<div class="flash">{{$d.Flash}}</div>{{end}}
+{{if $d.ErrorDetail}}<div class="error">{{$d.ErrorDetail}}</div>{{end}}
+
+<form class="stack" method="post" action="/admin/sql/query">
+  <input type="hidden" name="confirm" value="{{.Confirm}}">
+  <div><label for="q">Statement</label><textarea id="q" name="statement" class="sqlbox" spellcheck="false" placeholder="SELECT from_callsign, COUNT(*) AS n FROM messages GROUP BY from_callsign ORDER BY n DESC LIMIT 20;">{{$d.PreFill}}</textarea></div>
+  <div class="row"><button class="btn" type="submit">Run</button><span class="quiet">Ctrl+Enter runs it.</span></div>
+</form>
+
+{{if $r}}
+<div class="strip mt-lg"><h2>Result</h2><span>{{if $r.Error}}error{{else if $r.Affected}}statement executed{{else}}{{$r.RowCount}} rows · {{$r.Elapsed}}{{end}}</span></div>
+
+{{if $r.Error}}
+<div class="error pre">{{$r.Error}}</div>
+{{else if $r.Affected}}
+<dl class="detail-grid">
+  <dt>Rows affected</dt><dd>{{num $r.RowsAffected}}</dd>
+  <dt>Last insert id</dt><dd>{{num $r.LastInsertID}}</dd>
+  <dt>Elapsed</dt><dd>{{$r.Elapsed}}</dd>
+</dl>
+{{else}}
+{{if $r.Truncated}}<div class="flash">Showing the first {{$d.Limit}} rows. Add <span class="accent">LIMIT</span> or aggregate to see the rest.</div>{{end}}
+<div class="scroll"><table class="sqlresult">
+  <thead><tr>{{range $r.Columns}}<th>{{.}}</th>{{end}}</tr></thead>
+  <tbody>{{range $r.Rows}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+</table></div>
+{{end}}
+{{end}}
+
+<div class="strip mt-lg"><h2>Schema</h2><span>{{len $d.Schema}} objects</span></div>
+<div class="scroll"><table class="tbl-pairs">
+  <thead><tr><th>Type</th><th>Name</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Schema}}
+    <tr>
+      <td class="metaline">{{.Type}}</td>
+      <td><strong>{{.Name}}</strong></td>
+      <td><div class="actions">
+        <form method="post" action="/admin/sql/schema"><input type="hidden" name="confirm" value="{{$.Confirm}}"><input type="hidden" name="name" value="{{.Name}}"><button class="btn secondary small" type="submit">Definition</button></form>
+        <a class="btn secondary small" href="/admin/sql?q=SELECT%20*%20FROM%20{{.Name}}%20LIMIT%2050">Preview</a>
+      </div></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table></div>
+{{template "admin_layout_end" .}}{{end}}

@@ -255,9 +255,10 @@ spec:
     app.kubernetes.io/name: aprs-archive-web
 ---
 ---
-# The admin deployment. It runs the same image as the public server with
-# APRS_ARCHIVE_ROLE=admin, which is what gives it a read-write handle and the
-# exception routes. The public deployment has neither.
+# The admin deployment. Same image, different binary: aprs-archive-admin is a
+# separate program with its own route table, its own templates and a read-write
+# handle. The public server cannot serve an admin path because that code is not
+# linked into it.
 #
 # It is a separate Deployment, not a route on the public one, so the public
 # server keeps its read-only mount, read-only database handle and absence of
@@ -300,10 +301,10 @@ spec:
       - name: admin
         image: ghcr.io/ea7klk/aprs-archive@sha256:fee4ad8f69c2ebfc0c1fbf1c5e6eb99da572dff58b789b285c657ee8188d0c14
         imagePullPolicy: IfNotPresent
-        command: ["/usr/local/bin/aprs-archive-web"]
+        # A separate binary from the public server: its own route table, so a
+        # route cannot leak between the two applications.
+        command: ["/usr/local/bin/aprs-archive-admin"]
         env:
-        - name: APRS_ARCHIVE_ROLE
-          value: admin
         - name: APRS_ARCHIVE_DB
           value: /var/lib/aprs-archive/archive.db
         - name: APRS_ARCHIVE_ADDR
