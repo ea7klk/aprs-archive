@@ -32,6 +32,29 @@
   </aside>
 </div>
 
+<div class="strip mt-lg"><h2>Busiest pairs</h2><span>direct messages · both directions, bulletins excluded</span></div>
+{{if $d.Pairs}}
+<div class="scroll">
+<table class="tbl-pairs">
+  <thead><tr><th class="pairs-rank">#</th><th>Stations</th><th class="pairs-share">Messages</th><th>Share of pairs</th></tr></thead>
+  <tbody>
+  {{$max := $d.PairsMax}}{{$pairs := $d.Pairs}}
+  {{range $i, $p := $pairs}}
+    <tr>
+      <td class="pairs-rank">{{add $i 1}}</td>
+      <td><a class="accent" href="/stations/{{$p.A}}">{{$p.A}}</a> <span class="muted">↔</span> <a class="accent" href="/stations/{{$p.B}}">{{$p.B}}</a></td>
+      <td class="pairs-share">{{num $p.Count}}</td>
+      <td><span class="v bar-inline"><i style="width:{{barWidth $p.Count $max}}"></i></span></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="quiet mt-sm">A pair is two stations that exchanged direct messages in the window. Sending and receiving are counted together, so A↔B and B↔A are one row. Stations that only broadcast a bulletin are not paired: a bulletin addresses a group, not a station.</p>
+{{else}}
+<p class="muted">No station-to-station messages in this window.</p>
+{{end}}
+
 <div class="strip mt-lg"><h2>Bulletins by category</h2><span>whole archive</span></div>
 <div class="scroll">
 <table>

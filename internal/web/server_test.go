@@ -284,3 +284,19 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func TestStatisticsShowsBusiestPairs(t *testing.T) {
+	// The seeded archive already holds EA7KLK-9 <-> N0CALL. Pairs are rendered
+	// from it, and the bulletin addressees must never appear as stations.
+	srv, _ := newTestServer(t)
+	body := get(t, srv.Handler(), "/statistics?days=7").Body.String()
+	if !strings.Contains(body, "Busiest pairs") {
+		t.Fatal("the busiest-pairs section is missing")
+	}
+	if !strings.Contains(body, "N0CALL") {
+		t.Fatal("the seeded pair is missing from the ranking")
+	}
+	if strings.Contains(body, "BLN1WXZL</a>") {
+		t.Fatal("a bulletin address appears as a station in the pair ranking")
+	}
+}

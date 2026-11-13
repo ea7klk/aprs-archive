@@ -326,3 +326,11 @@
       .bar-row { grid-template-columns: 110px 1fr 62px; }
       .msgtext { font-size: 14px; }
     }
+
+    /* Pair ranking: a table with an inline bar, so the ranking reads as a list
+       and the proportion reads at a glance. */
+    .tbl-pairs { table-layout: auto; min-width: 520px; }
+    .tbl-pairs .pairs-rank { width: 3%; color: var(--dim); font-variant-numeric: tabular-nums; }
+    .tbl-pairs .pairs-share { width: 12%; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+    .tbl-pairs td .bar-inline { display: block; height: 12px; background: #ffffff08; border: 1px solid var(--rule); }
+    .tbl-pairs td .bar-inline i { display: block; height: 100%; background: var(--grad); }

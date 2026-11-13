@@ -3,6 +3,8 @@ package web
 import (
 	"strconv"
 	"strings"
+
+	"aprs-archive/internal/store"
 )
 
 // groupDigits formats an integer with thin, ASCII-only thousands separators.
@@ -27,4 +29,15 @@ func groupDigits(n int64) string {
 		return "-" + b.String()
 	}
 	return b.String()
+}
+
+// maxPairCount is the largest pair count, for bar widths in the template.
+func maxPairCount(pairs []store.Pair) int64 {
+	var m int64
+	for _, p := range pairs {
+		if p.Count > m {
+			m = p.Count
+		}
+	}
+	return m
 }

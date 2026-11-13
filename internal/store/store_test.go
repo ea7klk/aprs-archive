@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,4 +319,140 @@ func TestBackupProducesReadableCopy(t *testing.T) {
 		t.Fatalf("backup count=%d err=%v", n, err)
 	}
 	_ = path
+}
+
+// ---- busiest pairs ----
+
+func TestTopPairsCountsBothDirectionsAsOnePair(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	seed(t, db, []aprs.Packet{
+		msg("EA7KLK-9", "N0CALL", "one"),
+		msg("N0CALL", "EA7KLK-9", "two"),
+		msg("n0call", "ea7klk-9", "three"), // case differs on the wire
+		msg("DL6TJ", "EA7KLK-9", "other partner"),
+	}, now)
+
+	pairs, err := TopPairs(context.Background(), db, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("TopPairs: %v", err)
+	}
+	if len(pairs) != 2 {
+		t.Fatalf("pairs = %d (%+v), want 2", len(pairs), pairs)
+	}
+	top := pairs[0]
+	if top.A != "EA7KLK-9" || top.B != "N0CALL" || top.Count != 3 {
+		t.Fatalf("top pair = %+v, want EA7KLK-9 <-> N0CALL with 3", top)
+	}
+	if top.A > top.B {
+		t.Fatalf("pair is not in lexical order: %q > %q", top.A, top.B)
+	}
+}
+
+func TestTopPairsExcludesBulletins(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	seed(t, db, []aprs.Packet{
+		msg("A-1", "B", "hello"),
+		bulletin("A-1", "NWS", "warning"),
+		bulletin("A-1", "NWS", "warning"),
+	}, now)
+
+	pairs, err := TopPairs(context.Background(), db, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("TopPairs: %v", err)
+	}
+	if len(pairs) != 1 {
+		t.Fatalf("pairs = %+v, want only the direct message", pairs)
+	}
+	if pairs[0].Count != 1 {
+		t.Fatalf("count = %d, want 1 (bulletins excluded)", pairs[0].Count)
+	}
+}
+
+func TestTopPairsSelfAddressIsItsOwnPair(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	seed(t, db, []aprs.Packet{
+		msg("WX1-1", "WX1-1", "telemetry to self"),
+		msg("WX1-1", "WX1-1", "again"),
+	}, now)
+	pairs, err := TopPairs(context.Background(), db, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("TopPairs: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].A != "WX1-1" || pairs[0].B != "WX1-1" || pairs[0].Count != 2 {
+		t.Fatalf("pairs = %+v", pairs)
+	}
+}
+
+func TestTopPairsRespectsTheWindow(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	seed(t, db, []aprs.Packet{msg("A", "B", "old")}, now.Add(-48*time.Hour))
+	seed(t, db, []aprs.Packet{msg("C", "D", "new")}, now)
+
+	pairs, err := TopPairs(context.Background(), db, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("TopPairs: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].A != "C" {
+		t.Fatalf("window not applied: %+v", pairs)
+	}
+}
+
+func TestTopPairsRanksByCount(t *testing.T) {
+	_, db := newTestArchive(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	var packets []aprs.Packet
+	for i := 0; i < 5; i++ {
+		packets = append(packets, msg("BUSY", "PARTNER", "x"))
+	}
+	packets = append(packets, msg("QUIET", "OTHER", "x"))
+	packets = append(packets, msg("QUIET", "OTHER", "x"))
+	seed(t, db, packets, now)
+
+	pairs, err := TopPairs(context.Background(), db, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("TopPairs: %v", err)
+	}
+	if pairs[0].A != "BUSY" || pairs[0].Count != 5 {
+		t.Fatalf("ranking wrong: %+v", pairs)
+	}
+	if len(pairs) < 2 || pairs[1].Count != 2 {
+		t.Fatalf("second pair wrong: %+v", pairs)
+	}
+}
+
+// TestTopPairsQueryUsesTheKindIndex pins the plan the measurement chose.
+//
+// The alternative — an index on the canonical pair — was measured on two
+// million rows and rejected: it grows the file by about 11%, the planner never
+// picks it, and forcing it is twice as slow because it cannot apply the time
+// filter. If this test starts failing, the query changed shape: re-measure
+// before adding an index.
+func TestTopPairsQueryUsesTheKindIndex(t *testing.T) {
+	_, db := newTestArchive(t)
+	rows, err := db.Query("EXPLAIN QUERY PLAN "+topPairsQuery,
+		int64(0), int64(1<<40), 10)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+	var plans []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plans = append(plans, detail)
+	}
+	joined := strings.Join(plans, "\n")
+	if !strings.Contains(joined, "idx_messages_kind") {
+		t.Fatalf("pair query no longer uses the kind index:\n%s", joined)
+	}
+	if strings.Contains(joined, "SCAN messages") {
+		t.Fatalf("pair query scans the whole table:\n%s", joined)
+	}
 }

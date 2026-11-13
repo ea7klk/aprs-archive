@@ -107,6 +107,8 @@ type statisticsData struct {
 	Kinds         []store.Bucket
 	Senders       []store.Bucket
 	Recipients    []store.Bucket
+	Pairs         []store.Pair
+	PairsMax      int64
 	CategoryRows  []categoryRow
 	Groups        []store.Bucket
 	DBBytes       int64
@@ -137,6 +139,13 @@ func (s *Server) statistics(w http.ResponseWriter, r *http.Request) {
 	kinds, _ := store.KindCounts(ctx, s.db, since, now)
 	senders, _ := store.TopSenders(ctx, s.db, since, now, 15)
 	recipients, _ := store.TopRecipients(ctx, s.db, since, now, 15)
+	// Pairs are the headline statistic and the most expensive query, so they get
+	// a wider limit: a ranking of conversations is more useful than a ranking of
+	// stations, and the aggregation already visits every row in the window.
+	pairs, err := store.TopPairs(ctx, s.db, since, now, 20)
+	if err != nil {
+		log.Printf("statistics pairs: %v", err)
+	}
 	groups, _ := store.BulletinGroups(ctx, s.db, 20)
 	collector, _ := store.GetCollectorState(ctx, s.db)
 	size, _ := store.DatabaseSize(s.cfg.DBPath)
@@ -158,6 +167,8 @@ func (s *Server) statistics(w http.ResponseWriter, r *http.Request) {
 		Kinds:         kinds,
 		Senders:       senders,
 		Recipients:    recipients,
+		Pairs:         pairs,
+		PairsMax:      maxPairCount(pairs),
 		CategoryRows:  s.bulletinCategoryRows(ctx),
 		Groups:        groups,
 		DBBytes:       size,
