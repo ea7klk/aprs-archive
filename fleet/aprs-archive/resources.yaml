@@ -173,6 +173,10 @@ spec:
           value: "365"
         - name: APRS_ARCHIVE_COLLECTOR_STALE_MINUTES
           value: "15"
+        # Three months. The archive keeps a year, but a report scans a window
+        # and an unbounded window is a full table scan on a year of traffic.
+        - name: APRS_ARCHIVE_REPORT_MAX_DAYS
+          value: "92"
         ports:
         - name: http
           containerPort: 8080

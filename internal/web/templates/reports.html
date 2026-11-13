@@ -1,12 +1,12 @@
 {{define "reports"}}{{template "layout_start" .}}
 {{$d := .Data}}{{$spec := $d.Spec}}
 <div class="pagehead">
-  <div><p class="kicker">Reports</p><h1>Build a report</h1><p class="lede">Counts over a date range, grouped the way you need them. Every report can be downloaded as CSV.</p></div>
+  <div><p class="kicker">Reports</p><h1>Build a report</h1><p class="lede">Counts over a date range, grouped the way you need them. Every report can be downloaded as CSV. A report covers at most {{$d.ReportMaxDays}} days; a longer range is trimmed to its last {{$d.ReportMaxDays}} days.</p></div>
 </div>
 
 <form class="filters" method="get" action="/reports">
   <input type="hidden" name="run" value="1">
-  <div><label for="r-since">From date (UTC)</label><input id="r-since" name="since" type="date" value="{{date $spec.Since}}"></div>
+  <div><label for="r-since">From date (UTC)</label><input id="r-since" name="since" type="date" value="{{date $spec.Since}}" min="{{oldestDay $spec.Until $d.ReportMaxDays}}" max="{{lastDay $spec.Until}}"></div>
   <div><label for="r-until">To date (UTC)</label><input id="r-until" name="until" type="date" value="{{lastDay $spec.Until}}"></div>
   <div><label for="r-group">Group by</label><select id="r-group" name="group_by">{{range $d.Groupings}}<option value="{{.ID}}" {{if eq $spec.GroupBy .ID}}selected{{end}}>{{.Label}}</option>{{end}}</select></div>
   <div><label for="r-kind">Kind</label><select id="r-kind" name="kind">
@@ -20,6 +20,7 @@
 </form>
 
 {{if $d.Ran}}
+{{if $spec.Truncated}}<div class="flash">The range you asked for is longer than the {{$d.ReportMaxDays}}-day reporting limit, so the report starts on {{date $spec.Since}} instead of the date you entered. The end of the range was kept.</div>{{end}}
 <div class="strip mt-lg"><h2>Result</h2><span>{{num $d.Result.Total}} packets · {{date $spec.Since}} → {{lastDay $spec.Until}}</span></div>
 {{if $d.Error}}<div class="error">{{$d.Error}}</div>{{end}}
 {{if $d.Result.Rows}}
@@ -43,7 +44,7 @@
   <dt>Total packets</dt><dd>{{num $d.Result.Total}}</dd>
 </dl>
 {{else}}
-<p class="muted mt">Choose a window and a grouping, then run the report. The range is capped at {{$d.RetentionDays}} days, which is the archive's own retention.</p>
+<p class="muted mt">Choose a window and a grouping, then run the report. A report covers at most {{$d.ReportMaxDays}} days, even though the archive keeps {{$d.RetentionDays}}.</p>
 {{end}}
 {{template "layout_end" .}}{{end}}
 

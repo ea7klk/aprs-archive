@@ -45,6 +45,15 @@ func parseTemplates() (*template.Template, error) {
 			}
 			return t.AddDate(0, 0, -1).UTC().Format("2006-01-02")
 		},
+		// oldestDay is the earliest start a report may use: the reporting limit
+		// counted back from the chosen end, so the date picker cannot offer a
+		// window the server would trim.
+		"oldestDay": func(until time.Time, maxDays int) string {
+			if until.IsZero() || maxDays <= 0 {
+				return ""
+			}
+			return until.AddDate(0, 0, -maxDays).UTC().Format("2006-01-02")
+		},
 		"lastStamp": func(t time.Time) string {
 			if t.IsZero() {
 				return "—"

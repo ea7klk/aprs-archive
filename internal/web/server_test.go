@@ -399,3 +399,75 @@ func TestSearchFormEchoesTheInclusiveDay(t *testing.T) {
 		t.Fatal("the search form does not echo the day the user picked")
 	}
 }
+
+// ---- reporting limit ----
+
+// TestReportWindowIsCappedAtThreeMonths pins the operational limit: a report
+// scans a window, and an unbounded one is a full table scan.
+func TestReportWindowIsCappedAtThreeMonths(t *testing.T) {
+	srv, _ := newTestServer(t)
+	if srv.cfg.ReportMaxDays != 92 {
+		t.Fatalf("default report limit = %d days, want 92", srv.cfg.ReportMaxDays)
+	}
+	body := get(t, srv.Handler(), "/reports?run=1&group_by=day&since=2025-01-01&until=2026-11-13").Body.String()
+	if !strings.Contains(body, "reporting limit") {
+		t.Fatal("a trimmed window is not announced")
+	}
+	// The end of the range is kept; the start moves forward.
+	if strings.Contains(body, "2025-01-01") && strings.Contains(body, "→ 2025-01-01") {
+		t.Fatal("the start of the range was not trimmed")
+	}
+}
+
+func TestReportWindowLimitIsExactlyTheLimit(t *testing.T) {
+	spec := ReportSpec{GroupBy: "day", Since: time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC), Until: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)}
+	spec.window(time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC), 92)
+	if spec.Truncated {
+		t.Fatal("a 92-day window was trimmed despite the 92-day limit")
+	}
+}
+
+func TestReportWindowTrimsFromTheStart(t *testing.T) {
+	end := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	spec := ReportSpec{GroupBy: "day", Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Until: end}
+	spec.window(time.Now(), 92)
+	if !spec.Truncated {
+		t.Fatal("an over-long window was not reported as trimmed")
+	}
+	if !spec.Until.Equal(end) {
+		t.Fatalf("the end moved: %v, want %v", spec.Until, end)
+	}
+	if got := spec.Until.Sub(spec.Since); got != 92*24*time.Hour {
+		t.Fatalf("window = %v, want 92 days", got)
+	}
+}
+
+func TestReportLimitNeverExceedsRetention(t *testing.T) {
+	// A report limit above retention would promise history the archive does
+	// not hold.
+	db, err := store.OpenWriter(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	defer db.Close()
+	srv, err := New(Config{DBPath: "x", RetentionDays: 30, ReportMaxDays: 365, Now: time.Now}, db)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if srv.cfg.ReportMaxDays != 30 {
+		t.Fatalf("report limit = %d, want 30 (retention)", srv.cfg.ReportMaxDays)
+	}
+}
+
+func TestReportDatePickerCannotOfferATooEarlyStart(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := get(t, srv.Handler(), "/reports?since=2026-01-01&until=2026-11-13").Body.String()
+	// "Until 13 November" is exclusive in the query (14 November 00:00), so the
+	// earliest permitted start is 92 days before that: 14 August.
+	if !strings.Contains(body, `min="2026-08-14"`) {
+		t.Fatal("the from-date field does not bound itself to the reporting limit")
+	}
+	if !strings.Contains(body, "at most 92 days") {
+		t.Fatal("the page does not state the reporting limit")
+	}
+}

@@ -27,6 +27,11 @@ write lock.
 
 Retention is **365 days** for both messages and bulletins, swept nightly.
 
+A **report** covers at most **92 days** (three months). Retention is how much
+history exists; the reporting limit is how much of it one query may scan. A
+longer range is trimmed from the start and the page says so — the end of the
+range is kept, because that is the part a visitor asked for last.
+
 Acknowledgements and rejections are message-format packets, so the parser
 classifies them — but they are delivery receipts, not traffic, and the archive
 keeps what was said, not the bookkeeping around it. They are dropped in the
@@ -79,6 +84,7 @@ Web:
 | `APRS_ARCHIVE_LOCATION` | `https://aprs.ea7klk.es` | Shown in the header |
 | `APRS_ARCHIVE_RETENTION_DAYS` | `365` | Shown to visitors; caps report ranges |
 | `APRS_ARCHIVE_COLLECTOR_STALE_MINUTES` | `15` | When the header says "idle" |
+| `APRS_ARCHIVE_REPORT_MAX_DAYS` | `92` | Longest window one report may scan (three months) |
 
 ## Deployment
 

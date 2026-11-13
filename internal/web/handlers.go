@@ -179,12 +179,16 @@ func (s *Server) statistics(w http.ResponseWriter, r *http.Request) {
 
 // ReportSpec is what a report is asked for, and what its CSV exports.
 type ReportSpec struct {
-	Kind     string
-	Station  string
-	Since    time.Time
-	Until    time.Time
-	GroupBy  string
-	Category string
+	// Truncated is set when the requested window was longer than the reporting
+	// limit and the start was moved forward. The page says so rather than
+	// presenting a shorter range as the one that was asked for.
+	Truncated bool
+	Kind      string
+	Station   string
+	Since     time.Time
+	Until     time.Time
+	GroupBy   string
+	Category  string
 }
 
 // ValidGroupings are the report groupings offered.
@@ -225,13 +229,25 @@ func (spec *ReportSpec) window(now time.Time, maxDays int) {
 		spec.Until = now
 	}
 	if spec.Since.IsZero() {
-		spec.Since = spec.Until.AddDate(0, 0, -30)
+		defaultDays := 30
+		if maxDays > 0 && defaultDays > maxDays {
+			defaultDays = maxDays
+		}
+		spec.Since = spec.Until.AddDate(0, 0, -defaultDays)
 	}
 	if !spec.Until.After(spec.Since) {
 		spec.Until = spec.Since.AddDate(0, 0, 1)
 	}
-	if maxDays > 0 && spec.Until.Sub(spec.Since) > time.Duration(maxDays)*24*time.Hour {
-		spec.Since = spec.Until.AddDate(0, 0, -maxDays)
+	if maxDays > 0 {
+		// Until is exclusive, so a window of exactly maxDays spans maxDays days
+		// and ends the instant it begins. Anything longer is trimmed from the
+		// start: the end of the range is the part the visitor asked for last
+		// and is the part the report must keep.
+		limit := time.Duration(maxDays) * 24 * time.Hour
+		if spec.Until.Sub(spec.Since) > limit {
+			spec.Since = spec.Until.Add(-limit)
+			spec.Truncated = true
+		}
 	}
 	if !spec.ValidGrouping() {
 		spec.GroupBy = "day"
@@ -379,13 +395,13 @@ func groupingLabel(groupBy string) string {
 
 func (s *Server) reportsForm(w http.ResponseWriter, r *http.Request) {
 	spec := parseReportSpec(r)
-	spec.window(s.cfg.Now(), s.cfg.RetentionDays)
+	spec.window(s.cfg.Now(), s.cfg.ReportMaxDays)
 	exportQuery := spec.query()
 
 	if r.URL.Query().Get("run") == "" {
 		s.render(w, r, http.StatusOK, "reports", &reportsData{
 			Spec: spec, Groupings: ValidGroupings, Categories: aprs.BulletinCategories,
-			RetentionDays: s.cfg.RetentionDays, Ran: false, ExportQuery: exportQuery,
+			RetentionDays: s.cfg.RetentionDays, ReportMaxDays: s.cfg.ReportMaxDays, Ran: false, ExportQuery: exportQuery,
 		}, "")
 		return
 	}
@@ -394,14 +410,14 @@ func (s *Server) reportsForm(w http.ResponseWriter, r *http.Request) {
 		log.Printf("report: %v", err)
 		s.render(w, r, http.StatusOK, "reports", &reportsData{
 			Spec: spec, Groupings: ValidGroupings, Categories: aprs.BulletinCategories,
-			RetentionDays: s.cfg.RetentionDays, Ran: true, ExportQuery: exportQuery,
+			RetentionDays: s.cfg.RetentionDays, ReportMaxDays: s.cfg.ReportMaxDays, Ran: true, ExportQuery: exportQuery,
 			Error: "The report could not be computed.",
 		}, "")
 		return
 	}
 	s.render(w, r, http.StatusOK, "reports", &reportsData{
 		Spec: spec, Groupings: ValidGroupings, Categories: aprs.BulletinCategories,
-		RetentionDays: s.cfg.RetentionDays, Ran: true, Result: &result, ExportQuery: exportQuery,
+		RetentionDays: s.cfg.RetentionDays, ReportMaxDays: s.cfg.ReportMaxDays, Ran: true, Result: &result, ExportQuery: exportQuery,
 	}, "")
 }
 
@@ -410,6 +426,7 @@ type reportsData struct {
 	Groupings     []struct{ ID, Label string }
 	Categories    []aprs.BulletinCategory
 	RetentionDays int
+	ReportMaxDays int
 	Ran           bool
 	Result        *ReportResult
 	Error         string
@@ -439,7 +456,7 @@ func filterArchivedKind(kind string) string {
 
 func (s *Server) reportCSV(w http.ResponseWriter, r *http.Request) {
 	spec := parseReportSpec(r)
-	spec.window(s.cfg.Now(), s.cfg.RetentionDays)
+	spec.window(s.cfg.Now(), s.cfg.ReportMaxDays)
 	result, err := s.Run(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "report failed", http.StatusInternalServerError)

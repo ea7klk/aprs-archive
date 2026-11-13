@@ -19,14 +19,22 @@ import (
 
 // Config is everything the server needs from the environment.
 type Config struct {
-	Addr              string
-	DBPath            string
-	AppName           string
-	Location          string
-	Topic             string
-	Version           string
-	Collector         string
-	RetentionDays     int
+	Addr      string
+	DBPath    string
+	AppName   string
+	Location  string
+	Topic     string
+	Version   string
+	Collector string
+	// RetentionDays is how long the archive keeps data; it is a property of
+	// the collector and is shown to visitors.
+	RetentionDays int
+	// ReportMaxDays bounds a single report's window. It is deliberately
+	// independent of RetentionDays: retention is how much history exists,
+	// this is how much of it one query may scan. A 30-day window over a
+	// year of traffic is a cheap index range on (kind, received_at); unbound,
+	// the same query walks ten million rows.
+	ReportMaxDays     int
 	CollectorStaleFor time.Duration
 	// Now is injectable so tests can pin the clock.
 	Now func() time.Time
@@ -49,6 +57,14 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 	}
 	if cfg.CollectorStaleFor <= 0 {
 		cfg.CollectorStaleFor = 15 * time.Minute
+	}
+	if cfg.ReportMaxDays <= 0 {
+		cfg.ReportMaxDays = 92
+	}
+	// A report limit above the retention period would promise history the
+	// archive no longer holds; the smaller of the two wins.
+	if cfg.ReportMaxDays > cfg.RetentionDays {
+		cfg.ReportMaxDays = cfg.RetentionDays
 	}
 	s := &Server{cfg: cfg, db: db}
 	tpl, err := parseTemplates()

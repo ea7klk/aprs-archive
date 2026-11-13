@@ -46,6 +46,10 @@ func run() error {
 	}
 	retentionDays, _ := strconv.Atoi(env("APRS_ARCHIVE_RETENTION_DAYS", "365"))
 	cfg.RetentionDays = retentionDays
+	// Three months. The archive keeps a year, but a report scans a window, and
+	// an unbounded window is a full table scan dressed up as a dashboard.
+	reportMaxDays, _ := strconv.Atoi(env("APRS_ARCHIVE_REPORT_MAX_DAYS", "92"))
+	cfg.ReportMaxDays = reportMaxDays
 	stale, _ := strconv.Atoi(env("APRS_ARCHIVE_COLLECTOR_STALE_MINUTES", "15"))
 	cfg.CollectorStaleFor = time.Duration(stale) * time.Minute
 
