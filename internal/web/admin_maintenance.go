@@ -302,3 +302,38 @@ func humanBytes(n int64) string {
 	}
 	return strconv.FormatFloat(float64(n)/float64(div), 'f', 1, 64) + " " + string("KMGTPE"[exp]) + "iB"
 }
+
+// adminRoot serves the bare admin hostname.
+//
+// The admin deployment has no public pages, so "/" must be something: a signed-in
+// operator gets the exception list (the page they most often want), and everyone
+// else is asked for the password. A 404 here would look like a broken deployment.
+func (s *Server) adminRoot(w http.ResponseWriter, r *http.Request) {
+	if !s.admin.enabled() {
+		s.renderAdminStatus(w, r, http.StatusServiceUnavailable, "admin_login", nil, adminDisabled)
+		return
+	}
+	if !s.admin.authorized(r) {
+		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+// adminNotFound answers a path this application does not serve.
+//
+// The public archive is not served here, so a visitor following a link from the
+// public site to /messages gets a real answer rather than a 404 that says
+// nothing: this deployment is the admin one, and here is where it lives.
+func (s *Server) adminNotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+		`<meta name="robots" content="noindex"><title>Not here</title>` +
+		`<style>body{font-family:ui-monospace,monospace;background:#080a18;color:#f2f0ff;padding:40px;line-height:1.6}` +
+		`a{color:#4fd8ff}h1{font-size:20px;letter-spacing:.1em;text-transform:uppercase}</style></head><body>` +
+		`<h1>Not part of the admin application</h1>` +
+		`<p>This host serves administration only: the callsign exception list and archive maintenance.</p>` +
+		`<p><a href="/admin">Admin home</a> · the public archive is at <a href="https://aprs.ea7klk.es/">aprs.ea7klk.es</a></p>` +
+		`</body></html>`))
+}

@@ -77,6 +77,11 @@ full suite before every commit.
    the handler — that is a surface, and its safety then depends on every future
    edit. `TestPublicServerHasNoAdminRoutes` and `TestPublicServerCannotWrite`
    pin both halves.
+   `Handler` registers **one deployment's routes**, not both with a conditional:
+   the public server never serves `/admin`, and the admin server never serves
+   `/messages`, `/bulletins` or `/`. A hostname is the application it names.
+   `TestAdminDeploymentDoesNotServeThePublicSite` is the regression for the day
+   it was not.
 10. **Validation is bidirectional and exceptions beat it.** A message is stored
    only if both endpoints pass. The exception list is consulted first and wins
    in both directions, so a "drop" entry works for a station that prefixes would

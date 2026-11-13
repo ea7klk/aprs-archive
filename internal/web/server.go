@@ -114,9 +114,33 @@ func New(cfg Config, db *sql.DB) (*Server, error) {
 }
 
 // Handler returns the routed, middleware-wrapped handler.
+// Handler returns the routes this deployment serves.
+//
+// The two deployments are different applications that share a binary:
+//
+//   - the public server serves the archive and has no admin code path;
+//   - the admin server serves administration and nothing else.
+//
+// They were previously one route table with the admin half conditional, which
+// meant the admin hostname also served the public site at "/" — an operator
+// typing the admin URL landed on a visitor page and had to know the /admin
+// prefix. A hostname should be the application it names. Registering the other
+// deployment's routes and refusing them would still leave them reachable code;
+// not registering them at all is the guarantee.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.health)
 
+	if s.readOnly {
+		s.publicRoutes(mux)
+	} else {
+		s.adminRoutes(mux)
+	}
+	return securityHeaders(mux)
+}
+
+// publicRoutes is the anonymous, read-only archive.
+func (s *Server) publicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /messages", s.messages)
 	mux.HandleFunc("GET /messages/{id}", s.messageDetail)
@@ -129,35 +153,44 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /reports/data", s.reportData)
 	mux.HandleFunc("GET /reports/export.csv", s.reportCSV)
 	mux.HandleFunc("GET /about", s.about)
-	mux.HandleFunc("GET /healthz", s.health)
+}
 
-	// Admin routes exist only on the deployment that holds a write handle.
-	// Registering them on the public server and refusing inside the handler
-	// would leave a surface whose safety depended on every future edit
-	// remembering the check; not registering them means the public server has
-	// no admin code path at all.
-	if !s.readOnly {
-		mux.HandleFunc("GET /admin", s.adminPage)
-		mux.HandleFunc("GET /admin/login", s.adminLogin)
-		mux.HandleFunc("POST /admin/login", s.adminLoginPost)
-		mux.HandleFunc("POST /admin/logout", s.adminLogout)
-		mux.HandleFunc("POST /admin/exceptions", s.adminAddException)
-		mux.HandleFunc("POST /admin/exceptions/delete/{callsign}", s.adminDeleteException)
-		mux.HandleFunc("POST /admin/prefixes/refresh", s.adminRefreshPrefixes)
+// adminRoutes is the exception list and archive maintenance.
+//
+// Everything except the login page and the health endpoint needs a session; the
+// write forms additionally carry a confirmation token.
+func (s *Server) adminRoutes(mux *http.ServeMux) {
+	// The admin application's front page is its own content. Without this the
+	// hostname answers "/" with a 404 once the public routes are gone, which
+	// reads as a broken deployment to anyone who types the bare URL.
+	mux.HandleFunc("GET /{$}", s.adminRoot)
 
-		// Database maintenance. Every route re-checks the session; the write
-		// forms additionally carry a confirmation token.
-		mux.HandleFunc("GET /admin/database", s.adminDatabase)
-		mux.HandleFunc("POST /admin/database/checkpoint", s.adminCheckpoint)
-		mux.HandleFunc("POST /admin/database/vacuum", s.adminVacuum)
-		mux.HandleFunc("POST /admin/database/reindex", s.adminReindex)
-		mux.HandleFunc("POST /admin/database/backup", s.adminBackup)
-		mux.HandleFunc("GET /admin/database/backup/{name}", s.adminDownloadBackup)
-		mux.HandleFunc("POST /admin/database/backup/{name}/delete", s.adminDeleteBackup)
-		mux.HandleFunc("POST /admin/database/delete-before", s.adminDeleteBefore)
-	}
+	mux.HandleFunc("GET /admin", s.adminPage)
+	mux.HandleFunc("GET /admin/login", s.adminLogin)
+	mux.HandleFunc("POST /admin/login", s.adminLoginPost)
+	mux.HandleFunc("POST /admin/logout", s.adminLogout)
+	mux.HandleFunc("POST /admin/exceptions", s.adminAddException)
+	mux.HandleFunc("POST /admin/exceptions/delete/{callsign}", s.adminDeleteException)
+	mux.HandleFunc("POST /admin/prefixes/refresh", s.adminRefreshPrefixes)
 
-	return securityHeaders(mux)
+	mux.HandleFunc("GET /admin/database", s.adminDatabase)
+	mux.HandleFunc("POST /admin/database/checkpoint", s.adminCheckpoint)
+	mux.HandleFunc("POST /admin/database/vacuum", s.adminVacuum)
+	mux.HandleFunc("POST /admin/database/reindex", s.adminReindex)
+	mux.HandleFunc("POST /admin/database/backup", s.adminBackup)
+	mux.HandleFunc("GET /admin/database/backup/{name}", s.adminDownloadBackup)
+	mux.HandleFunc("POST /admin/database/backup/{name}/delete", s.adminDeleteBackup)
+	mux.HandleFunc("POST /admin/database/delete-before", s.adminDeleteBefore)
+
+	// The trailing-slash form is what a person types. A signed-in operator goes
+	// to the list; everyone else goes to the login page.
+	mux.HandleFunc("GET /admin/{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	})
+	// Any other path is not part of this application.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		s.adminNotFound(w, r)
+	})
 }
 
 // viewData is what every template receives.

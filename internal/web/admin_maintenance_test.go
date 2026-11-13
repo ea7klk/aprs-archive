@@ -186,3 +186,106 @@ func TestPublicServerHasNoMaintenanceRoutes(t *testing.T) {
 		t.Log("backup directory exists (fine if a test created it)")
 	}
 }
+
+// TestAdminDeploymentDoesNotServeThePublicSite is the regression for the
+// reported fault: https://aprs-admin.ea7klk.es/ served the public home page.
+//
+// The public routes were registered on both deployments with only the admin
+// half conditional, so the admin hostname answered "/" with the archive. A
+// hostname should be the application it names.
+func TestAdminDeploymentDoesNotServeThePublicSite(t *testing.T) {
+	ts := newAdminServer(t, "pw")
+	c := client()
+
+	// Unauthenticated "/" goes to the login page, not to the archive.
+	resp, err := c.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("get /: %v", err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/admin/login" {
+		t.Fatalf("/ landed on %s, want /admin/login", resp.Request.URL.Path)
+	}
+
+	// No public page is served at all.
+	for _, p := range []string{"/messages", "/bulletins", "/statistics", "/reports", "/stations", "/about"} {
+		r, err := c.Get(ts.URL + p)
+		if err != nil {
+			t.Fatalf("get %s: %v", p, err)
+		}
+		body := readAll(t, ts.URL+p, c)
+		r.Body.Close()
+		if strings.Contains(body, "Every message, on the record") || strings.Contains(body, "Bulletin reader") {
+			t.Errorf("%s served the public site from the admin deployment", p)
+		}
+	}
+
+	// And once signed in, "/" is the admin home.
+	resp, err = c.PostForm(ts.URL+"/admin/login", url.Values{"password": {"pw"}})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	resp.Body.Close()
+	resp, err = c.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("get / after login: %v", err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/admin" {
+		t.Fatalf("signed-in / landed on %s, want /admin", resp.Request.URL.Path)
+	}
+}
+
+// TestPublicDeploymentServesNoAdminPage is the other direction, and pins that
+// the public site still works after the split.
+func TestPublicDeploymentServesNoAdminPage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	db, err := store.OpenWriter(path)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	defer db.Close()
+	reader, err := store.OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer reader.Close()
+	srv, err := New(Config{
+		DBPath: path, AdminPassword: "pw", AppName: "APRS Archive", Version: "test",
+		RetentionDays: 365, ReportMaxDays: 92, CollectorStaleFor: 60,
+	}, reader)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h := srv.Handler()
+	// The archive itself works.
+	if rec := get(t, h, "/"); rec.Code != http.StatusOK {
+		t.Fatalf("public / = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(get(t, h, "/").Body.String(), "Every message, on the record") {
+		t.Fatal("the public home page did not render")
+	}
+	// Admin paths do not exist.
+	for _, p := range []string{"/admin", "/admin/login", "/admin/database"} {
+		if rec := get(t, h, p); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d on the public server, want 404", p, rec.Code)
+		}
+	}
+}
+
+// TestAdminTrailingSlashRedirects covers the URL a person actually types.
+func TestAdminTrailingSlashRedirects(t *testing.T) {
+	ts := newAdminServer(t, "pw")
+	c := client()
+	resp, err := c.Get(ts.URL + "/admin/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/admin/login" && resp.Request.URL.Path != "/admin" {
+		t.Fatalf("/admin/ landed on %s", resp.Request.URL.Path)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatal("/admin/ is a 404")
+	}
+}
