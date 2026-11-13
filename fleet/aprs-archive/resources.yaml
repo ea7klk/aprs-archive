@@ -48,7 +48,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: collector
-        image: ghcr.io/ea7klk/aprs-archive@sha256:89f07b0adc169c376a43ee9dc1ebb7b6e9e93070b59973aafa249ba119980f1d
+        image: ghcr.io/ea7klk/aprs-archive@sha256:f992cffe1fa47b58cfc3f5a88ef0a618d06fddaf97cae040e59ea0d9eeb5bb5e
         imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/aprs-archive-collector"]
         env:
@@ -164,7 +164,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: web
-        image: ghcr.io/ea7klk/aprs-archive@sha256:89f07b0adc169c376a43ee9dc1ebb7b6e9e93070b59973aafa249ba119980f1d
+        image: ghcr.io/ea7klk/aprs-archive@sha256:f992cffe1fa47b58cfc3f5a88ef0a618d06fddaf97cae040e59ea0d9eeb5bb5e
         imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/aprs-archive-web"]
         env:
@@ -298,7 +298,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: admin
-        image: ghcr.io/ea7klk/aprs-archive@sha256:89f07b0adc169c376a43ee9dc1ebb7b6e9e93070b59973aafa249ba119980f1d
+        image: ghcr.io/ea7klk/aprs-archive@sha256:f992cffe1fa47b58cfc3f5a88ef0a618d06fddaf97cae040e59ea0d9eeb5bb5e
         imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/aprs-archive-web"]
         env:
