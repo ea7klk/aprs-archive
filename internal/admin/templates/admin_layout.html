@@ -23,7 +23,7 @@
       <div class="sub ident">https://aprs-admin.ea7klk.es · exception list and archive maintenance</div>
     </div>
   </div>
-  {{if .Confirm}}
+  {{if .Authed}}
   <nav class="tabs" aria-label="Admin sections">
     <a href="/admin" {{if not .AdminNav}}aria-current="page"{{end}}>Exceptions</a>
     <a href="/admin/database" {{if .AdminNav}}aria-current="page"{{end}}>Database</a>

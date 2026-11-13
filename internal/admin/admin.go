@@ -193,6 +193,10 @@ type view struct {
 	Now           time.Time
 	Confirm       string
 	RetentionDays int
+	// Authed decides whether the signed-in navigation is rendered. It is not
+	// derived from Confirm: every page carries a confirmation token, so using
+	// that as the test showed "Sign out" to visitors who were not signed in.
+	Authed bool
 }
 
 // render draws a page with the layout the admin templates share.
@@ -213,6 +217,7 @@ func (s *Server) renderStatus(w http.ResponseWriter, r *http.Request, status int
 		Now:           s.cfg.Now(),
 		Confirm:       s.confirmToken(),
 		RetentionDays: s.cfg.RetentionDays,
+		Authed:        s.authorized(r),
 	}
 	var buf strings.Builder
 	if err := s.tpl.ExecuteTemplate(&buf, name, vd); err != nil {
@@ -314,7 +319,15 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		// exactly how the trailing-newline problem above was found by hand.
 		// The password is never logged; only that an attempt failed, and from
 		// where.
-		log.Printf("admin: failed login from %s", clientIP(r))
+		// The diagnostics separate the two ways a login fails: the password did
+		// not match, or the browser never sent the request. Logging the length
+		// and whether the value differs only in surrounding whitespace tells an
+		// operator which without ever writing the password itself.
+		submitted := r.PostFormValue("password")
+		log.Printf("admin: failed login from %s: enabled=%v submitted_len=%d trimmed_len=%d trailing_ws=%v match_after_trim=%v",
+			clientIP(r), s.Enabled(), len(submitted), len(strings.TrimSpace(submitted)),
+			submitted != strings.TrimSpace(submitted),
+			strings.TrimSpace(submitted) == strings.TrimSpace(s.cfg.Password))
 		s.renderStatus(w, r, http.StatusUnauthorized, "admin_login", nil, "Wrong password.")
 		return
 	}
