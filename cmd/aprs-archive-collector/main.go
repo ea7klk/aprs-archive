@@ -104,17 +104,18 @@ func run() error {
 	// The flush loop is separate from the read loop on purpose: a slow disk or
 	// a busy database must apply backpressure through the batch size, not stall
 	// the socket long enough for the server to time us out.
-	// Callsign validation. The prefix list is loaded before the listener starts:
-	// a collector that begins storing before it can tell a station from a bot
-	// would fill the archive with the very traffic this is here to exclude.
+	// Callsign validation.
+	//
+	// The list is read from the archive, so a restart with no network still
+	// validates, and a list published by any writer is adopted by this process
+	// without restarting it. A restart drops the APRS-IS session and loses every
+	// packet in the gap, so nothing here may require one to pick up a list.
 	fetcher := prefixes.NewFetcher()
 	fetcher.URL = env("APRS_ARCHIVE_PREFIX_SOURCE", prefixes.DefaultSource)
-	listRefresh, _ := strconv.Atoi(env("APRS_ARCHIVE_PREFIX_REFRESH_HOURS", "24"))
-	fetcher.MaxAge = time.Duration(listRefresh) * time.Hour
-	if err := fetcher.Refresh(ctx); err != nil {
-		log.Printf("prefix list unavailable at startup, retrying in the background: %v", err)
-	} else if set, _ := fetcher.Snapshot(); set != nil {
-		log.Printf("prefix list loaded: %d prefixes from %s", set.Count, fetcher.URL)
+	if err := ensurePrefixCache(ctx, db, fetcher); err != nil {
+		// Starting without a list is safe but unproductive: validation fails
+		// closed, so nothing is stored until a list exists. Say so loudly.
+		log.Printf("ERROR: no usable prefix list and the fetch failed (%v); nothing will be stored until one is available", err)
 	}
 	checker := newValidator(ctx, db, fetcher)
 
@@ -139,7 +140,13 @@ func run() error {
 		}
 	}
 
-	go checker.refreshLoop(ctx, time.Duration(listRefresh)*time.Hour, time.Minute)
+	// Two different clocks. The watch is fast because it is what makes a newly
+	// published list take effect without a restart; the upstream refresh is slow
+	// because prefixes change on the scale of months and a conditional GET costs
+	// a few hundred bytes when nothing changed.
+	listRefresh, _ := strconv.Atoi(env("APRS_ARCHIVE_PREFIX_REFRESH_HOURS", "24"))
+	go watchLoop(ctx, checker)
+	go prefixRefreshLoop(ctx, db, fetcher, time.Duration(listRefresh)*time.Hour)
 
 	// The assembler holds the parts of multi-part messages until the set is
 	// complete. Each part is also stored immediately, so a set whose last part
@@ -185,7 +192,7 @@ func run() error {
 		log.Printf("assembled a %d-part message from=%s to=%s", len(replacedIDs), p.From, p.To)
 	}
 
-	healthSrv := startHealth(cfg.healthAddr, client, db)
+	healthSrv := startHealth(cfg.healthAddr, client, db, checker)
 	defer shutdown(healthSrv)
 
 	go flushLoop(ctx, writer, &pending, cfg.flushInterval)
@@ -316,7 +323,7 @@ func env(key, fallback string) string {
 
 // startHealth serves /livez, /readyz and /status for Kubernetes probes and for
 // an operator who wants to know what the collector is doing without reading logs.
-func startHealth(addr string, c *client, db *sql.DB) *http.Server {
+func startHealth(addr string, c *client, db *sql.DB, checker *validator) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -336,8 +343,13 @@ func startHealth(addr string, c *client, db *sql.DB) *http.Server {
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		connected := c.connected.Load()
-		fmt.Fprintf(w, "version=%s\nconnected=%t\nconnects=%d\nlines=%d\npackets=%d\nlast_error=%q\n",
-			version, connected, c.connects.Load(), c.lines.Load(), c.packets.Load(), c.lastErrorString())
+		gen, count, fetched := checker.prefixState()
+		fmt.Fprintf(w, "version=%s\nconnected=%t\nconnects=%d\nlines=%d\npackets=%d\nlast_error=%q\n"+
+			"prefix_generation=%d\nprefix_count=%d\nprefix_fetched=%s\n"+
+			"dropped_bot=%d\ndropped_no_list=%d\nprefix_reloads=%d\n",
+			version, connected, c.connects.Load(), c.lines.Load(), c.packets.Load(), c.lastErrorString(),
+			gen, count, fetched.Format(time.RFC3339),
+			checker.droppedBot.Load(), checker.droppedNoList.Load(), checker.reloads.Load())
 	})
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {

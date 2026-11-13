@@ -87,7 +87,13 @@ full suite before every commit.
    `/messages`, `/bulletins` or `/`. A hostname is the application it names.
    `TestAdminDeploymentDoesNotServeThePublicSite` is the regression for the day
    it was not.
-10. **Validation is bidirectional and exceptions beat it.** A message is stored
+10. **The prefix list is cache-first, never memory-only.** The collector reads
+   `prefix_cache` from the archive and adopts a new `generation` on its minute
+   tick. Publishing a list must never require a collector restart: a restart
+   drops the APRS-IS session and loses every packet in the gap. Never write a
+   body without parsing it first, and keep the loaded list when a cached body
+   fails to parse. With no list at all, store nothing (fail closed).
+11. **Validation is bidirectional and exceptions beat it.** A message is stored
    only if both endpoints pass. The exception list is consulted first and wins
    in both directions, so a "drop" entry works for a station that prefixes would
    accept. Exceptions are reloaded every minute, so the admin page takes effect

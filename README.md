@@ -87,6 +87,8 @@ Web:
 | `APRS_ARCHIVE_REPORT_MAX_DAYS` | `92` | Longest window one report may scan (three months) |
 | `APRS_ARCHIVE_ROLE` | `public` | `admin` gives the server a write handle and the admin routes |
 | `APRS_ARCHIVE_ADMIN_PASSWORD` | — | Admin page password; empty disables the page |
+| `APRS_ARCHIVE_PREFIX_SOURCE` | country-files.com/cty/cty.csv | Prefix dataset |
+| `APRS_ARCHIVE_PREFIX_REFRESH_HOURS` | `24` | How often to re-fetch the dataset upstream |
 
 ## Callsign validation
 
@@ -96,6 +98,25 @@ digit and begins with a prefix from the world-wide prefix list published at
 <https://www.country-files.com/cty/cty.csv>, refreshed daily. That rejects
 `WXBOT`, `ANSRVR`, `MYANET` and the rest of the machine traffic, and accepts
 `EA7KLK-9`, `IZ6RND` and `KH6ABC`.
+
+### How the list is kept current without restarts
+
+The dataset lives in the archive, in a one-row `prefix_cache` table, and the
+collector reads it from there rather than keeping it only in memory:
+
+- **Publishing a new list needs no restart.** Any writer (the admin page's
+  *Refresh prefix list*, or the collector itself) bumps the row's `generation`.
+  The collector polls the archive every minute and adopts a new generation by
+  swapping an immutable parsed set. A restart is expensive here: it drops the
+  APRS-IS session and every packet in the gap is never heard, so nothing may
+  require one to pick up a list.
+- **The upstream fetch is slow and conditional** — once a day, with
+  `If-None-Match`, so a day with no change costs a 304 rather than 108 KB.
+- **A bad list never replaces a good one.** A body is parsed and checked before
+  it is written, and a cached body that fails to parse on load is ignored in
+  favour of the list already in use.
+- **No list at all fails closed:** nothing is stored until one exists. A network
+  failure must not quietly re-admit the bot traffic this validation removes.
 
 Prefix validation cannot tell a station from a robot that named itself like one,
 so the operator maintains an **exception list** on the admin page. It is checked

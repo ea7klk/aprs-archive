@@ -32,7 +32,7 @@ import (
 )
 
 // SchemaVersion is bumped whenever schema.sql changes in a way that needs code.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // DSN for the writing process.
 //

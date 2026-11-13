@@ -268,6 +268,49 @@ func (f *Fetcher) Current(ctx context.Context) (*Set, error) {
 	return f.set, nil
 }
 
+// Fetch downloads the list, using a conditional request when the caller has a
+// previous validator.
+//
+// It returns notModified=true when the upstream answered 304, which means the
+// bytes on disk are already current: the caller should record that it checked
+// and reload nothing. This is what makes a daily refresh cost a few hundred
+// bytes instead of a hundred kilobytes on the days nothing changed.
+func (f *Fetcher) Fetch(ctx context.Context, etag, lastModified string) (body []byte, respETag, respLastModified string, notModified bool, err error) {
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
+	if reqErr != nil {
+		return nil, "", "", false, reqErr
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	if lastModified != "" {
+		req.Header.Set("If-Modified-Since", lastModified)
+	}
+	resp, err := f.Client.Do(req)
+	if err != nil {
+		f.recordErr(err)
+		return nil, "", "", false, err
+	}
+	defer resp.Body.Close()
+
+	respETag = resp.Header.Get("ETag")
+	respLastModified = resp.Header.Get("Last-Modified")
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, respETag, respLastModified, true, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("prefix source returned %s", resp.Status)
+		f.recordErr(err)
+		return nil, "", "", false, err
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		f.recordErr(err)
+		return nil, "", "", false, err
+	}
+	return body, respETag, respLastModified, false, nil
+}
+
 // Refresh downloads and replaces the snapshot.
 //
 // A failed download leaves the previous snapshot in place. Validation is the

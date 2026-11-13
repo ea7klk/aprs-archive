@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"aprs-archive/internal/prefixes"
 	"aprs-archive/internal/store"
 )
 
@@ -15,6 +16,9 @@ type exceptionData struct {
 	Exceptions    []store.Exception
 	PrefixCount   int
 	PrefixFetched time.Time
+	// Generation is the cache row the collector is validating against.
+	Generation    int64
+	BodyBytes     int
 	Source        string
 	PrefixRefresh string
 	Flash         string
@@ -32,20 +36,20 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "admin", nil, "The exception list could not be read.")
 		return
 	}
-	if _, err := s.prefix.Current(ctx); err != nil {
-		log.Printf("admin: prefix list unavailable: %v", err)
-	}
-	set, refreshErr := s.prefix.Snapshot()
-	data := &exceptionData{
-		Exceptions: exceptions,
-		Source:     s.prefix.URL,
-	}
-	if set != nil {
-		data.PrefixCount = set.Count
-		data.PrefixFetched = set.FetchedAt
-	}
-	if refreshErr != nil {
-		data.PrefixRefresh = refreshErr.Error()
+	data := &exceptionData{Exceptions: exceptions, Source: s.prefix.URL}
+	// Report the cache the collector actually validates against, not a copy
+	// this process fetched for display. They were different before, which is
+	// how a refreshed list could look current here and be ignored by the
+	// collector.
+	if snap, snapErr := store.ReadPrefixSnapshot(ctx, s.db); snapErr == nil {
+		data.PrefixCount = int(snap.PrefixCount)
+		data.PrefixFetched = snap.FetchedAt
+		data.Generation = snap.Generation
+		data.BodyBytes = len(snap.Body)
+	} else if snapErr != store.ErrNoPrefixSnapshot {
+		data.PrefixRefresh = snapErr.Error()
+	} else {
+		data.PrefixRefresh = "no prefix list has been cached yet"
 	}
 	data.Flash = r.URL.Query().Get("ok")
 	data.ErrorDetail = r.URL.Query().Get("err")
@@ -89,16 +93,46 @@ func (s *Server) refreshPrefixes(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePost(w, r) {
 		return
 	}
-	if err := s.prefix.Refresh(r.Context()); err != nil {
+	ctx := r.Context()
+	// This writes the archive's cache, not this process's memory. The collector
+	// validates against that row and adopts a new generation on its minute tick,
+	// so a refresh here takes effect without restarting the collector — a
+	// restart would drop the APRS-IS session and lose packets.
+	snap, snapErr := store.ReadPrefixSnapshot(ctx, s.db)
+	etag, lastMod := "", ""
+	if snapErr == nil {
+		etag, lastMod = snap.ETag, snap.LastModified
+	}
+	body, respETag, respLastMod, notModified, err := s.prefix.Fetch(ctx, etag, lastMod)
+	if err != nil {
 		s.result(w, r, "Prefix list refresh failed: "+err.Error(), false)
 		return
 	}
-	set, _ := s.prefix.Snapshot()
-	count := 0
-	if set != nil {
-		count = set.Count
+	if notModified {
+		if terr := store.TouchPrefixSnapshot(ctx, s.db, respETag, respLastMod); terr != nil {
+			s.result(w, r, "Upstream unchanged, but the check could not be recorded: "+terr.Error(), false)
+			return
+		}
+		s.result(w, r, "Upstream list is unchanged; the cached copy stays. The collector keeps using it.", true)
+		return
 	}
-	s.result(w, r, "Prefix list refreshed here: "+itoa(count)+" prefixes. The collector refreshes on its own schedule.", true)
+	// Parse before writing: a body that is not a plausible prefix list must
+	// never replace the one the collector is validating against.
+	set, perr := prefixes.ParseCSV(body)
+	if perr != nil {
+		s.result(w, r, "The downloaded list was rejected and the cached one kept: "+perr.Error(), false)
+		return
+	}
+	gen, werr := store.WritePrefixSnapshot(ctx, s.db, store.PrefixSnapshot{
+		Body: body, Source: s.prefix.URL, PrefixCount: int64(set.Count),
+		ETag: respETag, LastModified: respLastMod,
+	})
+	if werr != nil {
+		s.result(w, r, "Could not store the new list: "+werr.Error(), false)
+		return
+	}
+	s.result(w, r, "Stored "+itoa(set.Count)+" prefixes as generation "+itoa64(gen)+
+		". The collector adopts it within a minute, without a restart.", true)
 }
 
 // ---- database ----

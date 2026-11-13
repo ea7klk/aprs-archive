@@ -82,3 +82,33 @@ CREATE TABLE IF NOT EXISTS callsign_exceptions (
     note      TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL
 );
+
+-- The callsign prefix dataset, cached in one row.
+--
+-- The collector validates every packet against this list, and the list lives
+-- here rather than in memory so that:
+--
+--   - a collector restart with no network still validates;
+--   - a refresh published by any process (the admin page, a scheduled fetch)
+--     reaches the running collector without a restart, because the collector
+--     watches `generation` on its existing minute tick;
+--   - a failed or partial download can never replace a working list, since a
+--     new body is parsed and checked before this row is replaced.
+--
+-- One row. The full body is stored, not the parsed prefixes, so a parse bug can
+-- be diagnosed from what was actually fetched and the runtime structure stays a
+-- rebuild of it.
+CREATE TABLE IF NOT EXISTS prefix_cache (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    body         BLOB    NOT NULL,
+    source       TEXT    NOT NULL DEFAULT '',
+    -- Monotonic counter bumped by every write, so a reader can tell whether the
+    -- list changed by reading one integer instead of comparing the body.
+    generation   INTEGER NOT NULL DEFAULT 0,
+    fetched_at   INTEGER NOT NULL,
+    prefix_count INTEGER NOT NULL DEFAULT 0,
+    -- Weak validator from the upstream response, so a daily refresh can ask for
+    -- a 304 instead of re-downloading a hundred kilobytes.
+    etag         TEXT    NOT NULL DEFAULT '',
+    last_modified TEXT   NOT NULL DEFAULT ''
+);

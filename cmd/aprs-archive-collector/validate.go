@@ -29,63 +29,124 @@ import (
 //     example: it is a bot, but the operator wants its traffic.
 //  2. The prefix list, which says whether a callsign could belong to a real
 //     amateur station at all.
+//
+// The prefix list is read from the archive rather than held only in this
+// process. That is what lets a new list be adopted without a restart: a restart
+// drops the APRS-IS session, and every packet in the gap is never heard, so the
+// collector must never need one to pick up a list somebody published.
 type validator struct {
 	fetcher *prefixes.Fetcher
 	db      *sql.DB
 
-	// exceptions are reloaded periodically rather than read per packet: this
-	// runs on the read loop for every message on the network.
+	// mu guards exceptions, set and generation. It is taken once per message,
+	// so the list is a prebuilt Set rather than something parsed on demand.
 	mu         sync.RWMutex
 	exceptions map[string]bool
+	set        *prefixes.Set
+	generation int64
 
-	droppedBots     atomic.Int64
-	droppedExemptNo atomic.Int64
+	// Counters, reported by the status endpoint.
+	droppedNoList atomic.Int64
+	droppedBot    atomic.Int64
+	reloads       atomic.Int64
 }
 
 func newValidator(ctx context.Context, db *sql.DB, f *prefixes.Fetcher) *validator {
 	v := &validator{fetcher: f, db: db, exceptions: map[string]bool{}}
-	v.reloadExceptions(ctx)
+	if err := v.reloadExceptions(ctx); err != nil {
+		log.Printf("could not load callsign exceptions: %v", err)
+	}
+	v.reloadPrefixes(ctx)
 	return v
 }
 
-func (v *validator) reloadExceptions(ctx context.Context) {
+func (v *validator) reloadExceptions(ctx context.Context) error {
 	m, err := store.LoadExceptions(ctx, v.db)
 	if err != nil {
-		log.Printf("could not load callsign exceptions: %v", err)
-		return
+		return err
 	}
 	v.mu.Lock()
 	v.exceptions = m
 	v.mu.Unlock()
+	return nil
+}
+
+// reloadPrefixes reads the cached dataset and adopts it when it changed.
+//
+// Adoption is all-or-nothing: the body is parsed into a new Set, and only a set
+// that parses is swapped in. A corrupt or truncated cache leaves the current
+// list in place, so it can never turn validation off.
+func (v *validator) reloadPrefixes(ctx context.Context) {
+	snap, err := store.ReadPrefixSnapshot(ctx, v.db)
+	if err != nil {
+		if err != store.ErrNoPrefixSnapshot {
+			log.Printf("could not read the prefix snapshot: %v", err)
+		}
+		return
+	}
+	v.mu.RLock()
+	current := v.generation
+	v.mu.RUnlock()
+	if current == snap.Generation {
+		return
+	}
+	set, err := prefixes.ParseCSV(snap.Body)
+	if err != nil {
+		// Keep the list already in use. A bad snapshot is a reason to keep
+		// validating against the last good one, not to stop validating.
+		log.Printf("cached prefix snapshot %d is unusable, keeping the loaded list: %v", snap.Generation, err)
+		return
+	}
+	set.FetchedAt = snap.FetchedAt
+	set.Source = snap.Source
+	v.mu.Lock()
+	v.set = set
+	v.generation = snap.Generation
+	v.mu.Unlock()
+	v.reloads.Add(1)
+	log.Printf("prefix list active: generation %d, %d prefixes, fetched %s",
+		snap.Generation, set.Count, snap.FetchedAt.Format(time.RFC3339))
+}
+
+// Watch is the minute tick. It picks up a new prefix list, a new exception list,
+// or both, without touching the APRS-IS session.
+func (v *validator) Watch(ctx context.Context) {
+	if err := v.reloadExceptions(ctx); err != nil {
+		log.Printf("could not load callsign exceptions: %v", err)
+	}
+	v.reloadPrefixes(ctx)
 }
 
 // Keep reports whether a message between these two stations should be stored.
 func (v *validator) Keep(from, to string) bool {
-	if v.allow(from) && v.allow(to) {
-		return true
-	}
-	return false
+	return v.allow(from) && v.allow(to)
 }
 
 // allow decides one side of a message.
+//
+// Fail closed: with no prefix list at all, nothing is stored. That is a
+// deliberate reversal of the earlier behaviour, which accepted everything when
+// the list was missing — a network failure should not quietly re-admit the bot
+// traffic this validation exists to remove. The archive logs it and reports it
+// on the status endpoint rather than filling with traffic nobody wanted.
 func (v *validator) allow(callsign string) bool {
-	// An operator decision beats everything.
 	v.mu.RLock()
 	override, has := v.exceptions[upper(callsign)]
+	set := v.set
 	v.mu.RUnlock()
+
 	if has {
 		return override
 	}
-
-	set, err := v.fetcher.Snapshot()
-	if err != nil || set == nil {
-		// No prefix list yet. Refusing everything would silently empty the
-		// archive; accepting everything is the pre-validation behaviour, and
-		// the listener only starts once a list is loaded, so this is a
-		// transient state at worst.
+	if set == nil {
+		v.droppedNoList.Add(1)
+		return false
+	}
+	if set.Valid(callsign) {
 		return true
 	}
-	return set.Valid(callsign)
+	v.droppedBot.Add(1)
+	return false
 }
 
 func upper(s string) string {
@@ -98,28 +159,14 @@ func upper(s string) string {
 	return string(b)
 }
 
-// refreshLoop keeps the prefix list current and the exceptions fresh.
-func (v *validator) refreshLoop(ctx context.Context, listEvery, exceptionsEvery time.Duration) {
-	list := time.NewTicker(listEvery)
-	defer list.Stop()
-	exc := time.NewTicker(exceptionsEvery)
-	defer exc.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-list.C:
-			if err := v.fetcher.Refresh(ctx); err != nil {
-				log.Printf("prefix list refresh failed, keeping the previous list: %v", err)
-			} else if set, _ := v.fetcher.Snapshot(); set != nil {
-				log.Printf("prefix list refreshed: %d prefixes", set.Count)
-			}
-		case <-exc.C:
-			// The admin deployment writes the table directly; reloading here is
-			// what makes its changes take effect within a minute.
-			v.reloadExceptions(ctx)
-		}
+// prefixState reports what the validator is using, for the status endpoint.
+func (v *validator) prefixState() (generation int64, count int, fetched time.Time) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if v.set == nil {
+		return v.generation, 0, time.Time{}
 	}
+	return v.generation, v.set.Count, v.set.FetchedAt
 }
 
 // seedDefaultExceptions records the exceptions the archive starts with.
