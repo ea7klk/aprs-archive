@@ -141,6 +141,12 @@ func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusInternalServerError, "admin", nil, "The exception list could not be read.")
 		return
 	}
+	// The page shows the dataset validation is based on, so it must have one:
+	// a cached snapshot if this process fetched before, otherwise a fetch now.
+	// A failure is shown rather than hidden, and does not stop the page.
+	if _, err := s.admin.fetcher.Current(r.Context()); err != nil {
+		log.Printf("admin: prefix list unavailable: %v", err)
+	}
 	set, refreshErr := s.admin.fetcher.Snapshot()
 	data := &adminData{
 		Exceptions: exceptions,
