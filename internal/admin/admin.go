@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -253,10 +254,27 @@ func (s *Server) authorized(r *http.Request) bool {
 
 // checkPassword compares in constant time.
 func (s *Server) checkPassword(got string) bool {
-	if !s.Enabled() || got == "" {
+	if !s.Enabled() {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Password)) == 1
+	// Surrounding whitespace is stripped from both sides before the comparison.
+	//
+	// A password field cannot show a trailing newline, and the obvious way to
+	// read this secret — `kubectl ... | base64 -d` — appends one. Comparing raw
+	// bytes therefore rejected a password that was copied correctly, which is a
+	// property of the tooling, not of the operator. The stored password is
+	// trimmed as well, so a value pasted into the Secret with a stray newline
+	// still works.
+	//
+	// Trimming cannot weaken the check: the comparison is still byte-for-byte
+	// over the password itself, just without the invisible characters no
+	// password field is meant to carry.
+	want := strings.TrimSpace(s.cfg.Password)
+	got = strings.TrimSpace(got)
+	if want == "" || got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // validConfirm compares the CSRF token.
@@ -291,9 +309,16 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.checkPassword(r.PostFormValue("password")) {
+		// A failed login is logged: without it, an operator with the right
+		// password and a rejected login has nothing to look at, which is
+		// exactly how the trailing-newline problem above was found by hand.
+		// The password is never logged; only that an attempt failed, and from
+		// where.
+		log.Printf("admin: failed login from %s", clientIP(r))
 		s.renderStatus(w, r, http.StatusUnauthorized, "admin_login", nil, "Wrong password.")
 		return
 	}
+	log.Printf("admin: login from %s", clientIP(r))
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    s.sessionToken(),
@@ -372,4 +397,22 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// clientIP is the caller's address as Traefik passes it.
+//
+// X-Forwarded-For is a client-controlled header, so it is only as trustworthy as
+// the proxy in front — which is acceptable here because it is used for a log
+// line and nothing else. It is never used for authorisation.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }

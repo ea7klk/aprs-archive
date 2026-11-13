@@ -425,3 +425,67 @@ func between(s, start, end string) string {
 	}
 	return rest
 }
+
+// TestPasswordToleratesSurroundingWhitespace is the regression for a login that
+// failed with the correct password.
+//
+// The obvious way to read this secret is `kubectl ... | base64 -d`, which
+// appends a newline, and a password field cannot show one. Comparing raw bytes
+// rejected a password that had been copied correctly.
+func TestPasswordToleratesSurroundingWhitespace(t *testing.T) {
+	ts := newTestServer(t)
+	for _, submitted := range []string{"pw\n", " pw", "  pw  ", "\tpw\t", "pw\r\n"} {
+		resp, err := rawClient().PostForm(ts.URL+"/admin/login",
+			url.Values{"password": {submitted}})
+		if err != nil {
+			t.Fatalf("post %q: %v", submitted, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Errorf("password %q = %d, want 303", submitted, resp.StatusCode)
+		}
+	}
+	// Whitespace inside the password is still significant: trimming the ends
+	// must not turn a wrong password into the right one.
+	resp, err := rawClient().PostForm(ts.URL+"/admin/login", url.Values{"password": {"p w"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an interior space was accepted: %d", resp.StatusCode)
+	}
+	// And an empty submission is still refused.
+	resp, err = rawClient().PostForm(ts.URL+"/admin/login", url.Values{"password": {"   "}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("whitespace-only password = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestPasswordSetWithTrailingNewlineWorks covers the secret written with a
+// stray newline, which is what `echo` does.
+func TestPasswordSetWithTrailingNewlineWorks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.db")
+	w, _ := store.OpenWriter(path)
+	w.Close()
+	db, _ := store.OpenAdminWriter(path)
+	defer db.Close()
+	srv, err := New(Config{DBPath: path, Password: "secret\n"}, db)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ts := httptest.NewTLSServer(srv.Handler())
+	defer ts.Close()
+	resp, err := rawClient().PostForm(ts.URL+"/admin/login", url.Values{"password": {"secret"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a secret written with a newline refused the password: %d", resp.StatusCode)
+	}
+}
