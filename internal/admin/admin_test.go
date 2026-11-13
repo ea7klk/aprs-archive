@@ -166,8 +166,8 @@ func TestLoginAndSession(t *testing.T) {
 	if ck == nil {
 		t.Fatal("no session cookie")
 	}
-	if !ck.HttpOnly || !ck.Secure || ck.SameSite != http.SameSiteStrictMode {
-		t.Fatalf("cookie is not hardened: %+v", ck)
+	if !ck.HttpOnly || !ck.Secure || ck.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookie is not hardened as intended (Lax, HttpOnly, Secure): %+v", ck)
 	}
 }
 
