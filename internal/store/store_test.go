@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -809,5 +811,155 @@ func TestAssembleStoredPartsLeavesDatesAlone(t *testing.T) {
 	page, _ := SearchMessages(ctx, db, SearchFilter{Since: now.Add(-time.Hour), Until: now.Add(time.Hour)})
 	if page.Total != 2 {
 		t.Fatalf("%d rows, want both messages intact", page.Total)
+	}
+}
+
+// TestWriterSurvivesReplaceParts is the regression for a collector panic in
+// production on 2026-11-13: after assembling a set, the collector crashed once
+// and every later packet would have crashed it again.
+//
+// It reproduces the collector's exact order: store a part (which leaves a batch
+// open), complete the set, then ReplaceParts — and then keep reading.
+func TestWriterSurvivesReplaceParts(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	w, err := NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close(ctx)
+	assembler := aprs.NewAssembler(nil)
+
+	for i, body := range []string{"[1/2] one", "[2/2] two"} {
+		id, err := w.RecordPacket(ctx, msg("S", "R", body), now)
+		if err != nil {
+			t.Fatalf("record part %d: %v", i+1, err)
+		}
+		if i == 0 && !w.Dirty() {
+			t.Fatal("test setup: expected an open batch after the first part")
+		}
+		assembled, replaced, complete := assembler.Add(msg("S", "R", body), id)
+		if !complete {
+			continue
+		}
+		if id > 0 {
+			replaced = append(replaced, id)
+		}
+		if err := w.ReplaceParts(ctx, replaced, assembled, now); err != nil {
+			t.Fatalf("ReplaceParts: %v", err)
+		}
+	}
+
+	// The collector keeps reading; the next packet must not touch a closed
+	// statement handle.
+	if _, err := w.RecordPacket(ctx, msg("S", "OTHER", "after assembly"), now); err != nil {
+		t.Fatalf("record after assembly: %v", err)
+	}
+	if _, err := w.RecordPacket(ctx, bulletin("S", "NWS", "warning"), now); err != nil {
+		t.Fatalf("bulletin after assembly: %v", err)
+	}
+	if err := w.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("%d rows, want 3 (assembled + two after)", n)
+	}
+}
+
+// TestWriterRecoversFromAPrepareFailure covers the nil-statement path that
+// crashed the collector in production.
+//
+// The failure is induced directly — the statement handle is cleared while the
+// transaction stays open, which is the state abort() used to leave behind — and
+// the writer must rebuild both rather than dereference a nil handle.
+func TestWriterRecoversFromAPrepareFailure(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	w, err := NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close(ctx)
+
+	if _, err := w.RecordPacket(ctx, msg("A", "B", "first"), now); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// Reproduce the broken state: an open transaction whose statements are
+	// gone. Before the fix, open() treated this as ready and the next write
+	// dereferenced nil.
+	w.abort()
+	if _, err := w.RecordPacket(ctx, msg("A", "B", "after abort"), now); err != nil {
+		t.Fatalf("record after abort: %v", err)
+	}
+	if err := w.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("%d rows, want 1 (the aborted write was rolled back)", n)
+	}
+}
+
+// TestWriterIsSafeForConcurrentFlush is the regression for the production
+// panic on 2026-11-13. The collector records packets on the read goroutine
+// while flushLoop commits the open batch on a timer; before the writer took a
+// lock, a flush between a lookup and a write cleared the statement handles and
+// the packet path dereferenced nil.
+//
+// Run with -race: this is the test that would have caught it.
+func TestWriterIsSafeForConcurrentFlush(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	w, err := NewWriter(ctx, db)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close(ctx)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	// The flusher: what flushLoop does.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if err := w.Flush(ctx); err != nil {
+					t.Errorf("flush: %v", err)
+					return
+				}
+			}
+		}
+	}()
+	// The reader: what handle does.
+	for i := 0; i < 200; i++ {
+		if _, err := w.RecordPacket(ctx, msg("S", fmt.Sprintf("R%d", i%7), fmt.Sprintf("m%d", i)), now); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if err := w.Flush(ctx); err != nil {
+		t.Fatalf("final flush: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 200 {
+		t.Fatalf("%d rows, want 200", n)
 	}
 }

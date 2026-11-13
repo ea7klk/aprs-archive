@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"time"
 
 	"aprs-archive/internal/aprs"
@@ -21,9 +22,17 @@ const DefaultFlushInterval = 2 * time.Second
 // write lock for long or build an unbounded slice in memory.
 const DefaultBatchSize = 2000
 
-// Writer is the collector's handle on the archive. It is not safe for
-// concurrent use: the collector's single write loop owns it.
+// Writer is the collector's handle on the archive.
+//
+// It is safe for concurrent use through one mutex. That is not belt and braces:
+// the collector records packets on the read goroutine while a separate flush
+// goroutine commits the open batch on a timer, and those two touched the same
+// statement handles. A flush that ran between a lookup and a write cleared
+// w.ins, and the packet path then dereferenced nil — the panic that crashed the
+// collector on 2026-11-13. The mutex makes the commit and the write mutually
+// exclusive, which is also what the single SQLite write lock requires anyway.
 type Writer struct {
+	mu  sync.Mutex
 	db  *sql.DB
 	tx  *sql.Tx
 	ins *sql.Stmt
@@ -52,6 +61,8 @@ func NewWriter(ctx context.Context, db *sql.DB) (*Writer, error) {
 // set whose last part never comes must not lose what was said, and when the
 // set does complete the stored parts are replaced by one row.
 func (w *Writer) RecordPacket(ctx context.Context, p aprs.Packet, at time.Time) (int64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if err := w.open(ctx); err != nil {
 		return 0, err
 	}
@@ -99,6 +110,8 @@ func (w *Writer) RecordPacket(ctx context.Context, p aprs.Packet, at time.Time) 
 // The parts are identified by id, not by text: two different stations send the
 // same greeting, and a text match would delete somebody else's message.
 func (w *Writer) ReplaceParts(ctx context.Context, partIDs []int64, assembled aprs.Packet, at time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	// The open batch is committed first: the archive has one connection, and
 	// the transaction below needs it. Committing first also means the parts are
 	// definitely on disk before anything deletes them.
@@ -153,6 +166,8 @@ func replaceParts(ctx context.Context, db *sql.DB, partIDs []int64, assembled ap
 // history the archive promises, `bulletins` keeps the deduplicated copy a
 // reader browses.
 func (w *Writer) Record(ctx context.Context, p aprs.Packet, at time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if err := w.open(ctx); err != nil {
 		return err
 	}
@@ -187,21 +202,34 @@ func (w *Writer) Record(ctx context.Context, p aprs.Packet, at time.Time) error 
 
 // Flush commits the open transaction, if any.
 func (w *Writer) Flush(ctx context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.commit(ctx)
 }
 
 // Close flushes and releases statements. The database handle is closed by the
 // caller, which also owns it for retention and state updates.
 func (w *Writer) Close(ctx context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	// commit closes the statement handles, which belong to the transaction.
 	return w.commit(ctx)
 }
 
 // Dirty reports whether a transaction is open with uncommitted rows.
-func (w *Writer) Dirty() bool { return w.dirty > 0 }
+func (w *Writer) Dirty() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dirty > 0
+}
 
 func (w *Writer) open(ctx context.Context) error {
-	if w.tx != nil {
+	// The guard is on the statements, not only on the transaction. ReplaceParts
+	// commits through commit(), which closes the statement handles, so a writer
+	// whose transaction is nil *and* whose statements are nil must rebuild
+	// both. Treating a non-nil transaction as "ready" is what let a nil
+	// statement reach ExecContext and panic the collector.
+	if w.tx != nil && w.ins != nil && w.bul != nil {
 		return nil
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
@@ -256,7 +284,21 @@ func (w *Writer) commit(ctx context.Context) error {
 	return nil
 }
 
+// abort rolls back an open transaction and forgets everything bound to it.
+//
+// The statements belong to the transaction. Leaving them set after a rollback
+// left the writer holding handles bound to a dead transaction, which is exactly
+// the state that produced a nil-statement panic in production: open() saw a
+// transaction-less writer, tried to prepare again, and the stale handle was
+// either reused or nil.
 func (w *Writer) abort() {
+	if w.ins != nil {
+		_ = w.ins.Close()
+	}
+	if w.bul != nil {
+		_ = w.bul.Close()
+	}
+	w.ins, w.bul = nil, nil
 	if w.tx != nil {
 		_ = w.tx.Rollback()
 	}
