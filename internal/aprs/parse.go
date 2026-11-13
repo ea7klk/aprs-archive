@@ -166,6 +166,13 @@ func SplitMessageID(text string) (string, string) {
 		return text, ""
 	}
 	id := text[idx+1:]
+	// APRS101 writes the id as `{4X` with no closing brace, but clients send
+	// `{4X}` as well. Accepting the brace is what lets a part be recognised as
+	// a part: the archive saw `... les (2/3){4Y}` and stored the id as text.
+	braced := strings.HasSuffix(id, "}")
+	if braced {
+		id = strings.TrimSuffix(id, "}")
+	}
 	if id == "" || len([]rune(id)) > 5 {
 		return text, ""
 	}

@@ -8,19 +8,31 @@ import (
 
 // Multi-part messages.
 //
-// APRS has no multipart message type. Two incompatible conventions exist, and
-// the archive sees both:
+// APRS has no multipart message type, so senders invent numbering, and the
+// archive has to recognise each convention it sees:
 //
-//   - `[n/m] body` — the convention simple-ham-bbs uses and the only one that
-//     actually implies a set. Parts are numbered; m is how many there are.
-//   - A bare counter with no total, which cannot be assembled: without m there
-//     is no way to know when the message is complete.
+//	[1/2] body            prefix, the form simple-ham-bbs uses
+//	[n/m] body            prefix, any numbers
+//	body (1/3)            suffix, as EA3JCH-13 and EB3CLX-3 transmit
+//	body (2/3){4Y}        suffix followed by the part's own message id
 //
-// The `[1/1]` case deserves a warning, because it is the trap. Twenty-one of the
-// twenty-three numbered messages in the first day of live traffic were `[1/1]`
-// from a station addressing twenty-one different recipients. `[1/1]` is a
-// complete single-part message. Treating it as "part 1 of a set" would merge
-// twenty-one unrelated messages into one, so it never enters an assembly buffer.
+// The suffix form matters because it is invisible if the numbering is not
+// looked for at the end: a real three-part message from EA3JCH-13 to EB3CLX-3
+// arrived, was stored, and was never assembled because the prefix parser only
+// looked at the start of the body.
+//
+// Two rules keep the suffix form from matching prose. The numbering is a token
+// of its own — `les (2/3)` — so a body like `ALERTA ... (13/11)` is a date, not
+// a part, and single-digit numbering inside a word is not numbering at all. And
+// assembly needs a *set*: a second part with the same total from the same
+// sender to the same recipient, arriving in the window. A stray "(1/1)" in a
+// sentence therefore stays a message on its own, because the second rule cannot
+// be satisfied by chance.
+//
+// `[1/1]` and `(1/1)` are complete single-part messages and never open a set.
+// One station sent twenty-one `[1/1]` messages to twenty-one recipients in the
+// first day of traffic; treating them as parts of one set would have merged
+// twenty-one unrelated messages.
 
 // PartPrefix is a parsed `[n/m]` prefix.
 type PartPrefix struct {
@@ -29,21 +41,114 @@ type PartPrefix struct {
 	Body  string
 }
 
-// ParsePartPrefix reports whether a body begins with an `[n/m]` prefix.
+// PartSuffixRE matches a trailing "(n/m)" numbering token.
 //
-// Only the first nine parts are considered, which is what APRS clients that use
-// the convention produce; a larger m is treated as text rather than as a set
-// nobody can complete.
+// The token must be at the end of the body or followed only by a message id
+// ("{4Y}"), and either may be preceded by a space or by the end of the previous
+// word — but not by a digit, which is what separates "(2/3)" from the "13/11" in
+// a date written "(13/11)". Only single-digit numbering is accepted: a real
+// two-digit part is not a thing, and the restriction is what keeps years,
+// dates and fractions out.
+// ParsePartPrefix reports whether a body carries an `[n/m]` prefix or an
+// `(n/m)` suffix, and returns the part number, the total and the body without
+// the numbering.
+//
+// The prefix form is checked first because it is unambiguous; the suffix form
+// is then anchored to the end of the body.
 func ParsePartPrefix(text string) (PartPrefix, bool) {
 	text = strings.TrimLeft(text, " \t")
-	if !strings.HasPrefix(text, "[") {
+
+	if strings.HasPrefix(text, "[") {
+		close := strings.IndexByte(text, ']')
+		if close >= 4 && close <= 6 {
+			if p, ok := parseNumbering(text[1:close]); ok {
+				return PartPrefix{Part: p.Part, Total: p.Total, Body: strings.TrimPrefix(text[close+1:], " ")}, true
+			}
+		}
+	}
+
+	if p, ok := parsePartSuffix(text); ok {
+		return p, true
+	}
+
+	return PartPrefix{}, false
+}
+
+// parsePartSuffix recognises a trailing "(n/m)" numbering token.
+//
+// It is parsed by hand rather than by a regular expression, because that is the
+// clearer statement of a small grammatical rule and because it is easy to test
+// exhaustively: the token must end the body (optionally followed by a message id
+// in braces), must be one digit over one digit, and must be a token of its own.
+//
+// The "token of its own" test is what rejects a date. `(13/11)` is two digits
+// and is not numbering; `les (2/3)` is one digit and follows a space, so it is.
+// Inside a word — `x2/3)` — it is not.
+func parsePartSuffix(text string) (PartPrefix, bool) {
+	body := strings.TrimRight(text, " \t")
+
+	// Drop a trailing message id first: "(2/3){4Y}" ends with the id, not with
+	// the numbering. The braces must be a well-formed id, so prose that happens
+	// to end in "}" is not silently accepted.
+	if strings.HasSuffix(body, "}") {
+		k := strings.LastIndexByte(body, '{')
+		if k < 0 {
+			return PartPrefix{}, false
+		}
+		id := body[k+1 : len(body)-1]
+		if id == "" || len(id) > 5 || !isIDString(id) {
+			return PartPrefix{}, false
+		}
+		body = strings.TrimRight(body[:k], " \t")
+	}
+	if !strings.HasSuffix(body, ")") {
 		return PartPrefix{}, false
 	}
-	close := strings.IndexByte(text, ']')
-	if close < 4 || close > 6 {
+	open := strings.LastIndexByte(body, '(')
+	if open < 0 {
 		return PartPrefix{}, false
 	}
-	inner := text[1:close]
+	inner := body[open+1 : len(body)-1]
+	if len(inner) != 3 || inner[1] != '/' {
+		// One digit, a slash, one digit. "13/11" is a date, not numbering.
+		return PartPrefix{}, false
+	}
+	part, total := inner[0], inner[2]
+	if part < '1' || part > '9' || total < '1' || total > '9' {
+		return PartPrefix{}, false
+	}
+	if part > total {
+		return PartPrefix{}, false
+	}
+	// The token must be separated from the text before it: a space, punctuation
+	// or the start of the body. "x2/3)" has no separator and is not a part.
+	before := body[:open]
+	if before != "" {
+		switch last := before[len(before)-1]; last {
+		case ' ', '\t', '.', ',', '!', ';', ':':
+		default:
+			return PartPrefix{}, false
+		}
+	}
+	body = strings.TrimSpace(before)
+	if body == "" {
+		return PartPrefix{}, false
+	}
+	return PartPrefix{Part: int(part - '0'), Total: int(total - '0'), Body: body}, true
+}
+
+// isIDString reports whether every character of s is alphanumeric.
+func isIDString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isIDByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseNumbering parses "n/m" from the inside of a prefix.
+func parseNumbering(inner string) (PartPrefix, bool) {
 	partText, totalText, ok := strings.Cut(inner, "/")
 	if !ok || partText == "" || totalText == "" {
 		return PartPrefix{}, false
@@ -59,8 +164,7 @@ func ParsePartPrefix(text string) (PartPrefix, bool) {
 	if part < 1 || total < 1 || part > total || total > 9 {
 		return PartPrefix{}, false
 	}
-	body := strings.TrimPrefix(text[close+1:], " ")
-	return PartPrefix{Part: part, Total: total, Body: body}, true
+	return PartPrefix{Part: part, Total: total}, true
 }
 
 // IsMultiPart reports whether a body is one part of a set of two or more.

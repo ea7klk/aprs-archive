@@ -34,6 +34,12 @@ full suite before every commit.
 2. **Acks and rejects are not stored.** They parse as message-format packets so
    the parser models them, but `main.go` drops them before the writer, and
    `TestArchivedKindsExcludeAcks` pins it.
+   Multi-part numbering comes in **two** shapes and both are real:
+   `[1/2] body` and `body (2/3)`. A trailing `(n/m)` must be a token of its own
+   and one digit over one digit — `(13/11)` is a date and `x2/3)` is not
+   numbering. Message ids arrive as `{4X` (APRS101) and `{4X}` (some clients);
+   both must be stripped, and the braced id must be removed **before** the
+   suffix is examined, not after.
    Recognition is `internal/aprs.responseID`, and it must accept the forms that
    really arrive: `ack4A}`, `ack49}`, `ackJU}JT`, `ack`, `ACK`, `rej99}`,
    `ack{12}`, `ack 12`. It must not classify prose that begins with those

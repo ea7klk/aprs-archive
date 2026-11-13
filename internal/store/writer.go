@@ -403,18 +403,32 @@ func PurgeMisclassifiedResponses(ctx context.Context, db *sql.DB) (int64, error)
 // network drop, a crash — would leave the pair split forever. The rows are
 // already on disk, so replaying them closes that gap.
 //
-// Only rows whose body begins with `[` are read: that prefix is the only form
-// that can be a part, so the scan skips the archive's real bulk. Rows are fed
-// in arrival order and the assembler's clock is set to each row's timestamp, so
-// its timeout applies to the archive's timeline — a pair stored days apart is
-// still rejected — while the scan itself does not depend on when it runs.
+// Three row shapes are read, because the stored text depends on which build
+// wrote it:
+//
+//   - prefixed parts, whose body begins with `[`;
+//   - trailing-numbered parts, ending in `)`;
+//   - the same, as older builds stored them, ending in the braced message id
+//     (`... (2/3){4Y}`) — the id used to stay in the text.
+//
+// All three are narrow enough to skip the archive's bulk, and anything that
+// survives them still has to be accepted by the parser: a body that merely ends
+// in a bracket — a telemetry frame, a sentence in parentheses — is not a part.
+//
+// Rows are fed in arrival order and the assembler's clock is set to each row's
+// timestamp, so its timeout applies to the archive's timeline — a set stored
+// days apart is still rejected — while the scan itself does not depend on when
+// it runs.
 //
 // It returns how many messages it assembled.
 func AssembleStoredParts(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, received_at, from_callsign, to_callsign, msg_text, message_id
 		FROM messages
-		WHERE kind = 'message' AND substr(msg_text, 1, 1) = '['
+		WHERE kind = 'message'
+		  AND (substr(msg_text, 1, 1) = '['
+		       OR substr(rtrim(msg_text), -1, 1) = ')'
+		       OR substr(rtrim(msg_text), -1, 1) = '}')
 		ORDER BY received_at ASC, id ASC`)
 	if err != nil {
 		return 0, err

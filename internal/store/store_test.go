@@ -753,3 +753,61 @@ func TestAssembleStoredPartsIsIdempotent(t *testing.T) {
 		t.Fatalf("second pass assembled %d, want 0", second)
 	}
 }
+
+// TestAssembleStoredPartsReadsTrailingNumbering is the regression for the
+// reported failure: the replay only selected rows beginning with `[`, so a set
+// numbered at the end of each body was never revisited.
+func TestAssembleStoredPartsReadsTrailingNumbering(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 12, 19, 0, 0, time.UTC)
+	// Stored exactly as the old build wrote them: id left in the text, because
+	// the braced form was not recognised.
+	seed(t, db, []aprs.Packet{
+		{From: "EA3JCH-13", To: "EB3CLX-3", Text: "A la xarxa quedarà enllaçat perquè els nostres nodes (1/3){4X}", Kind: aprs.KindMessage},
+		{From: "EA3JCH-13", To: "EB3CLX-3", Text: "són igate; amb posar el digirepeater a Gardeny, les (2/3){4Y}", Kind: aprs.KindMessage},
+		{From: "EA3JCH-13", To: "EB3CLX-3", Text: "trames entraran a internet sense problemes (3/3){4Z}", Kind: aprs.KindMessage},
+	}, now)
+
+	count, err := AssembleStoredParts(ctx, db, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("AssembleStoredParts: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("assembled %d, want 1", count)
+	}
+	page, err := SearchMessages(ctx, db, SearchFilter{From: "EA3JCH-13", Since: now.Add(-time.Hour), Until: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("%d rows remain, want 1", page.Total)
+	}
+	want := "A la xarxa quedarà enllaçat perquè els nostres nodes són igate; amb posar el digirepeater a Gardeny, les trames entraran a internet sense problemes"
+	if page.Rows[0].Text != want {
+		t.Fatalf("assembled text =\n%q\nwant\n%q", page.Rows[0].Text, want)
+	}
+}
+
+// TestAssembleStoredPartsLeavesDatesAlone guards the false positive the suffix
+// form invites: a date in parentheses is not numbering.
+func TestAssembleStoredPartsLeavesDatesAlone(t *testing.T) {
+	_, db := newTestArchive(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seed(t, db, []aprs.Packet{
+		msg("A", "B", "ALERTA AMARILLA POR TORMENTAS (Viernes y noche (13/11)"),
+		msg("A", "B", "Clave incorrecta. Use: CQ KILNOY (o INFO/WEB)"),
+	}, now)
+	count, err := AssembleStoredParts(ctx, db, now)
+	if err != nil {
+		t.Fatalf("AssembleStoredParts: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("assembled %d, want 0", count)
+	}
+	page, _ := SearchMessages(ctx, db, SearchFilter{Since: now.Add(-time.Hour), Until: now.Add(time.Hour)})
+	if page.Total != 2 {
+		t.Fatalf("%d rows, want both messages intact", page.Total)
+	}
+}
