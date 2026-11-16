@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/filters/{id}/toggle", s.toggleFilter)
 	mux.HandleFunc("POST /admin/filters/{id}/delete", s.deleteFilter)
 	mux.HandleFunc("POST /admin/filters/test", s.testFilter)
+	mux.HandleFunc("POST /admin/filters/purge", s.purgeAll)
 
 	mux.HandleFunc("GET /admin/sql", s.sqlPage)
 	mux.HandleFunc("POST /admin/sql/query", s.sqlRun)

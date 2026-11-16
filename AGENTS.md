@@ -100,6 +100,10 @@ full suite before every commit.
    types — never "short message" or "mostly digits": `73` and `73!` are real
    sign-offs and must survive. Broad rules ship disabled (`EnabledByDefault:
    false`) so an operator reviews the match count before enabling them.
+   **Saving or enabling a rule purges its stored matches in the same action**
+   (`PurgeFilterMatches`, keyset-walked, called from `saveFilter` and
+   `toggleFilter`); disabling deletes nothing. Validate the pattern before the
+   save, so a broken one can never trigger a delete.
 12. **Validation is bidirectional and exceptions beat it.** A message is stored
    only if both endpoints pass. The exception list is consulted first and wins
    in both directions, so a "drop" entry works for a station that prefixes would

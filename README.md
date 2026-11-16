@@ -125,7 +125,14 @@ tracker health blocks, weather summaries, bare numeric series. The callsigns are
 valid, so callsign validation cannot see them; the body is what gives them away.
 
 Rules live in `message_filters` and are edited at `/admin/filters`. A message
-whose body matches any enabled pattern is dropped before storage. The page
+whose body matches any enabled pattern is dropped before storage.
+
+**Saving or enabling a rule also deletes the stored messages it matches**, in
+the same action, and reports how many went. The archive therefore reflects a new
+rule immediately rather than only from that moment on. A disabled rule deletes
+nothing, and a pattern that does not compile is refused before either the save or
+the delete happens. "Purge all enabled rules" re-runs the cleanup, for archive
+content written before a rule existed. The page
 validates a pattern before saving it, shows how many stored rows it currently
 matches, and has a tester so a pattern can be checked against a real body before
 it is enabled. The collector reloads rules on its minute tick — no restart.

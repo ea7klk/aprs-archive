@@ -1,7 +1,11 @@
 {{define "admin_filters"}}{{template "admin_layout_start" .}}
 {{$d := .Data}}
 <div class="pagehead">
-  <div><p class="kicker">Admin</p><h1>Telemetry filters</h1><p class="lede">A message body matching any enabled pattern is dropped before storage — uptime strings, tracker health blocks, weather summaries, bare numeric series. Callsigns are validated separately; these rules work on what the message says.</p></div>
+  <div><p class="kicker">Admin</p><h1>Telemetry filters</h1><p class="lede">A message body matching any enabled pattern is dropped before storage — uptime strings, tracker health blocks, weather summaries, bare numeric series. Callsigns are validated separately; these rules work on what the message says.</p>
+<p class="quiet mt-sm">Saving or enabling a rule also <strong>deletes the stored messages it matches</strong>, so the archive reflects the rule immediately rather than only for new traffic. A disabled rule touches nothing.</p></div>
+<div class="pageactions">
+  <form method="post" action="/admin/filters/purge"><input type="hidden" name="confirm" value="{{.Confirm}}"><button class="btn secondary" type="submit" onclick="return confirm('Run the purge again for every enabled rule? This deletes stored messages.')">Purge all enabled rules</button></form>
+</div>
 </div>
 
 {{if $d.Flash}}<div class="flash">{{$d.Flash}}</div>{{end}}
@@ -21,7 +25,7 @@
       <td>{{if .Enabled}}<span class="kind kind-message">on</span>{{else}}<span class="kind kind-bullet">off</span>{{end}}</td>
       <td><div class="actions">
         <a class="btn secondary small" href="/admin/filters?edit={{.ID}}">Edit</a>
-        <form method="post" action="/admin/filters/{{.ID}}/toggle"><input type="hidden" name="confirm" value="{{$.Confirm}}"><input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"><button class="btn secondary small" type="submit">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>
+        <form method="post" action="/admin/filters/{{.ID}}/toggle"><input type="hidden" name="confirm" value="{{$.Confirm}}"><input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"><button class="btn secondary small" type="submit" {{if not .Enabled}}onclick="return confirm('Enable and delete the stored messages it matches ({{.Matches}})?')"{{end}}>{{if .Enabled}}Disable{{else}}Enable and purge{{end}}</button></form>
         <form method="post" action="/admin/filters/{{.ID}}/delete"><input type="hidden" name="confirm" value="{{$.Confirm}}"><button class="btn danger small" type="submit" onclick="return confirm('Delete this filter?')">Delete</button></form>
       </div></td>
     </tr>
@@ -43,7 +47,7 @@
   </div>
   <div><label for="f-pattern">Pattern</label><input id="f-pattern" name="pattern" required class="pre" value="{{with $d.Edit}}{{.Pattern}}{{end}}" placeholder="^\[S[\d.]+\s+[A-Z]+"></div>
   <div><label for="f-note">Note</label><input id="f-note" name="note" value="{{with $d.Edit}}{{.Note}}{{end}}" placeholder="what it catches, and an example"></div>
-  <div class="row"><button class="btn" type="submit">Save</button>{{if $d.Edit}}<a class="btn secondary" href="/admin/filters">Cancel</a>{{end}}</div>
+  <div class="row"><button class="btn" type="submit" onclick="return confirm('Save this filter? Stored messages matching it will be deleted.')">Save and purge matches</button>{{if $d.Edit}}<a class="btn secondary" href="/admin/filters">Cancel</a>{{end}}</div>
 </form>
 <p class="quiet mt-sm">Patterns are applied to the message body with <span class="accent">^</span> anchoring where you write it. A pattern that does not compile is refused here rather than silently ignored by the collector.</p>
 

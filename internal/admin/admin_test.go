@@ -41,6 +41,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	writer.Close(ctx)
 	w.Close()
 
+	lastAdminDBPath = path
 	db, err := store.OpenAdminWriter(path)
 	if err != nil {
 		t.Fatalf("OpenAdminWriter: %v", err)
@@ -543,3 +544,7 @@ func TestLoginThenNavigateIsOneFlow(t *testing.T) {
 		}
 	}
 }
+
+// lastAdminDBPath is where the most recent test server put its archive, so a
+// test can open a read handle and assert on what changed.
+var lastAdminDBPath string

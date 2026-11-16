@@ -312,3 +312,86 @@ func PurgeTelemetry(ctx context.Context, db *sql.DB, isTelemetry func(string) bo
 	}
 	return total, ctx.Err()
 }
+
+// PurgeFilterMatches deletes every stored message that one pattern matches.
+//
+// It runs when a filter becomes active — on insert of a new rule, on edit, and
+// on enable — so that "add a filter" means the archive reflects the rule
+// immediately rather than only for traffic from now on. Without it the operator
+// enables a rule that visibly changes nothing, which is the confusing case.
+//
+// It asks the caller's predicate, so the cleanup and the collector use the same
+// compiled pattern. The walk is by ascending id — a keyset cursor, not OFFSET —
+// because the collector keeps writing while this runs, and each chunk commits on
+// its own so the write lock is released between them.
+//
+// It returns how many rows it removed.
+func PurgeFilterMatches(ctx context.Context, db *sql.DB, matches func(string) bool) (int64, error) {
+	const batch = 2000
+	var total int64
+	var cursor int64
+	for {
+		rows, err := db.QueryContext(ctx,
+			`SELECT id, msg_text FROM messages WHERE id > ? ORDER BY id LIMIT ?`, cursor, batch)
+		if err != nil {
+			return total, err
+		}
+		var ids []any
+		var scanned int
+		for rows.Next() {
+			var id int64
+			var text string
+			if err := rows.Scan(&id, &text); err != nil {
+				rows.Close()
+				return total, err
+			}
+			scanned++
+			cursor = id
+			if matches(text) {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return total, err
+		}
+		if len(ids) > 0 {
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+			res, err := db.ExecContext(ctx, "DELETE FROM messages WHERE id IN ("+placeholders+")", ids...)
+			if err != nil {
+				return total, err
+			}
+			n, _ := res.RowsAffected()
+			total += n
+		}
+		if scanned < batch {
+			break
+		}
+		if ctx.Err() != nil {
+			return total, ctx.Err()
+		}
+	}
+	return total, ctx.Err()
+}
+
+// CountFilterMatches reports how many stored messages one pattern matches,
+// without deleting anything. The admin page uses it to tell the operator what a
+// save is about to remove before they confirm.
+func CountFilterMatches(ctx context.Context, db *sql.DB, matches func(string) bool) (int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT msg_text FROM messages`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var n int64
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			return n, err
+		}
+		if matches(text) {
+			n++
+		}
+	}
+	return n, rows.Err()
+}
