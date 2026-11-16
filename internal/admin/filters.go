@@ -2,6 +2,11 @@ package admin
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -33,6 +38,28 @@ type filterData struct {
 	TestError string
 	// Edit is the row being edited, if any.
 	Edit *store.MessageFilter
+	// Apply is the "delete matching a pattern now" panel: the pattern as typed,
+	// and up to twelve examples of what it would delete.
+	Apply         string
+	ApplyCount    int64
+	ApplyCounted  bool
+	ApplyError    string
+	ApplyExamples []applyExample
+	ApplyRemoved  int64
+	ApplyDeleted  bool
+	// ApplyTokens are the patterns the operator has previewed and may now
+	// apply. Applying requires a token that only a preview can produce, so a
+	// delete can never be triggered by a form submitted without first seeing
+	// what it would remove.
+	ApplyToken string
+}
+
+// applyExample is one stored message a pattern would delete.
+type applyExample struct {
+	ID   int64
+	From string
+	At   string
+	Text string
 }
 
 func (s *Server) filtersPage(w http.ResponseWriter, r *http.Request) {
@@ -304,3 +331,153 @@ func (s *Server) testFilter(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, "admin_filters", data, "")
 }
+
+// ---- delete by pattern: preview, then apply ----
+
+// applyPreview counts what a pattern would delete and shows examples.
+//
+// The operator sees the number and a sample of the actual messages before
+// anything is removed. This is the read-only half of the operation, and nothing
+// is deleted here.
+func (s *Server) applyPreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.resultTo(w, r, "/admin/filters", "Malformed form.", false)
+		return
+	}
+	pattern := strings.TrimSpace(r.PostFormValue("pattern"))
+	data, err := s.filterPageData(r)
+	if err != nil {
+		s.render(w, r, "admin_filters", nil, "The filter list could not be read.")
+		return
+	}
+	data.Apply = pattern
+	data.ApplyCounted = true
+	if pattern == "" {
+		data.ApplyError = "Give a pattern to match."
+		s.render(w, r, "admin_filters", data, "")
+		return
+	}
+	if err := telemetry.Validate(pattern); err != nil {
+		data.ApplyError = "That pattern will not compile: " + err.Error()
+		s.render(w, r, "admin_filters", data, "")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	n, examples, err := countAndSample(ctx, s.db, pattern, 12)
+	if err != nil {
+		data.ApplyError = "Could not scan the archive: " + err.Error()
+		s.render(w, r, "admin_filters", data, "")
+		return
+	}
+	data.ApplyCount = n
+	data.ApplyExamples = examples
+	data.ApplyToken = s.applyToken(pattern)
+	s.render(w, r, "admin_filters", data, "")
+}
+
+// applyDelete removes every stored message matching the pattern.
+//
+// It requires the token produced by a preview, and the token encodes the
+// pattern, so the pattern actually applied is the one whose count the operator
+// saw. A hand-crafted POST cannot skip the preview.
+func (s *Server) applyDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePost(w, r) {
+		return
+	}
+	pattern := strings.TrimSpace(r.PostFormValue("pattern"))
+	supplied := r.PostFormValue("apply_token")
+	if pattern == "" {
+		s.resultTo(w, r, "/admin/filters", "Give a pattern to match.", false)
+		return
+	}
+	if !s.validApplyToken(pattern, supplied) {
+		s.resultTo(w, r, "/admin/filters",
+			"Preview this pattern first: the delete step needs the confirmation from the preview, so you can see what it will remove.", false)
+		return
+	}
+	removed, err := s.purgeForPattern(r.Context(), pattern)
+	if err != nil {
+		s.resultTo(w, r, "/admin/filters",
+			fmt.Sprintf("Deleted %d messages, then stopped: %v", removed, err), false)
+		return
+	}
+	s.resultTo(w, r, "/admin/filters", fmt.Sprintf(
+		"Deleted %d stored %s matching %s.", removed, plural(removed, "message", "messages"),
+		codeSpan(pattern)), true)
+}
+
+// countAndSample scans the archive once for both the count and the examples.
+func countAndSample(ctx context.Context, db *sql.DB, pattern string, limit int) (int64, []applyExample, error) {
+	m := telemetry.Compile([]telemetry.Source{{Name: "apply", Pattern: pattern}}, 0)
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, from_callsign, received_at, msg_text FROM messages`)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	var n int64
+	var out []applyExample
+	for rows.Next() {
+		var id, at int64
+		var from, text string
+		if err := rows.Scan(&id, &from, &at, &text); err != nil {
+			return n, out, err
+		}
+		if _, ok := m.Match(text); !ok {
+			continue
+		}
+		n++
+		if len(out) < limit {
+			out = append(out, applyExample{
+				ID: id, From: from, Text: text,
+				At: time.Unix(at, 0).UTC().Format("2006-01-02 15:04"),
+			})
+		}
+	}
+	return n, out, rows.Err()
+}
+
+// applyToken derives the confirmation for one pattern from the admin password.
+//
+// Encoding the pattern ties the token to exactly what was previewed, and
+// deriving it from the password means it dies with the session and cannot be
+// fabricated without the credential.
+func (s *Server) applyToken(pattern string) string {
+	mac := hmac.New(sha256.New, s.sessionKey)
+	mac.Write([]byte("aprs-archive-apply-v1"))
+	mac.Write([]byte(pattern))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) validApplyToken(pattern, supplied string) bool {
+	if supplied == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(supplied), []byte(s.applyToken(pattern))) == 1
+}
+
+// filterPageData loads the rule table shared by the page and the apply panel.
+func (s *Server) filterPageData(r *http.Request) (*filterData, error) {
+	filters, err := store.ListMessageFilters(r.Context(), s.db)
+	if err != nil {
+		return nil, err
+	}
+	data := &filterData{
+		Filters:     filters,
+		Flash:       r.URL.Query().Get("ok"),
+		ErrorDetail: r.URL.Query().Get("err"),
+	}
+	for i := range data.Filters {
+		data.Filters[i].Matches = s.countMatches(r.Context(), data.Filters[i].Pattern)
+	}
+	return data, nil
+}
+
+// codeSpan renders a pattern in the outcome message without letting its
+// characters break the redirect.
+func codeSpan(pattern string) string { return "\"" + pattern + "\"" }

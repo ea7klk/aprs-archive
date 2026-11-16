@@ -51,6 +51,35 @@
 </form>
 <p class="quiet mt-sm">Patterns are applied to the message body with <span class="accent">^</span> anchoring where you write it. A pattern that does not compile is refused here rather than silently ignored by the collector.</p>
 
+<div class="strip mt-lg"><h2>Delete matching a pattern now</h2><span>one-off · does not create a filter</span></div>
+<p class="quiet">For a pattern you do not want as a standing rule. Preview counts what it would delete and shows examples; nothing is removed until you press <strong>APPLY NOW</strong> after seeing the result.</p>
+<form class="stack" method="post" action="/admin/filters/apply/preview">
+  <input type="hidden" name="confirm" value="{{.Confirm}}">
+  <div><label for="ap-pattern">Pattern</label><input id="ap-pattern" name="pattern" class="pre" required value="{{$d.Apply}}" placeholder="^err [A-Z]+"></div>
+  <div class="row"><button class="btn secondary" type="submit">Preview what it would delete</button></div>
+</form>
+
+{{if $d.ApplyError}}<div class="error">{{$d.ApplyError}}</div>{{end}}
+{{if $d.ApplyCounted}}{{if not $d.ApplyError}}
+  {{if $d.ApplyCount}}
+  <div class="flash mt"><strong>{{num $d.ApplyCount}}</strong> stored {{if eq $d.ApplyCount 1}}message{{else}}messages{{end}} match <code class="pre">{{$d.Apply}}</code>. Nothing has been deleted yet.</div>
+  <div class="scroll mt"><table class="tbl-pairs">
+    <thead><tr><th>From</th><th>Received</th><th>Body</th></tr></thead>
+    <tbody>{{range $d.ApplyExamples}}<tr><td>{{.From}}</td><td class="metaline">{{.At}}</td><td class="pre">{{.Text}}</td></tr>{{end}}</tbody>
+  </table></div>
+  {{if lt $d.ApplyCount 12}}{{else}}<p class="quiet mt-sm">Showing the first 12 of {{num $d.ApplyCount}}.</p>{{end}}
+  <form class="row mt-lg" method="post" action="/admin/filters/apply/delete">
+    <input type="hidden" name="confirm" value="{{.Confirm}}">
+    <input type="hidden" name="pattern" value="{{$d.Apply}}">
+    <input type="hidden" name="apply_token" value="{{$d.ApplyToken}}">
+    <button class="btn danger" type="submit" onclick="return confirm('Delete {{$d.ApplyCount}} stored messages? This cannot be undone.')">APPLY NOW — delete {{num $d.ApplyCount}}</button>
+  </form>
+  <p class="quiet mt-sm">The count above belongs to this exact pattern. Changing it means previewing again.</p>
+  {{else}}
+  <div class="flash mt">No stored messages match <code class="pre">{{$d.Apply}}</code>. Nothing to delete.</div>
+  {{end}}
+{{end}}{{end}}
+
 <div class="strip mt-lg"><h2>Test a body</h2><span>check before you enable</span></div>
 <form class="stack" method="post" action="/admin/filters/test">
   <input type="hidden" name="confirm" value="{{.Confirm}}">

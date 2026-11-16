@@ -132,7 +132,14 @@ the same action, and reports how many went. The archive therefore reflects a new
 rule immediately rather than only from that moment on. A disabled rule deletes
 nothing, and a pattern that does not compile is refused before either the save or
 the delete happens. "Purge all enabled rules" re-runs the cleanup, for archive
-content written before a rule existed. The page
+content written before a rule existed.
+
+**Delete matching a pattern now** is a separate, one-off action for a pattern you
+do not want as a standing rule. It is two steps: *Preview* counts the matches and
+shows examples without deleting anything, then **APPLY NOW** deletes them. The
+apply step needs a token produced by the preview, and that token encodes the
+pattern, so a delete cannot happen without seeing its count and cannot be aimed
+at a different pattern than the one previewed. The page
 validates a pattern before saving it, shows how many stored rows it currently
 matches, and has a tester so a pattern can be checked against a real body before
 it is enabled. The collector reloads rules on its minute tick — no restart.

@@ -239,3 +239,153 @@ func strconvItoa(n int64) string {
 	}
 	return string(b)
 }
+
+// ---- delete matching a pattern now ----
+
+func TestApplyPreviewCountsWithoutDeleting(t *testing.T) {
+	ts := newFilterServer(t)
+	path := lastAdminDBPath
+	before := messageCount(t, path)
+	c, token := login(t, ts)
+
+	body := postForm(t, c, ts.URL+"/admin/filters/apply/preview", url.Values{
+		"confirm": {token}, "pattern": {`(?i)^uptime\s*:\s*\d`},
+	})
+	if !strings.Contains(body, "stored messages match") && !strings.Contains(body, "stored message match") {
+		t.Fatalf("the preview did not report a count:\n%s", firstLines(body, 40))
+	}
+	if !strings.Contains(body, "APPLY NOW") {
+		t.Fatal("the preview did not offer the apply button")
+	}
+	if !strings.Contains(body, "uptime: 3d 3h 30m 37s") {
+		t.Fatal("the preview did not show an example of what it would delete")
+	}
+	// Nothing removed by a preview.
+	if after := messageCount(t, path); after != before {
+		t.Fatalf("the preview deleted %d rows", before-after)
+	}
+}
+
+func TestApplyNow(t *testing.T) {
+	ts := newFilterServer(t)
+	path := lastAdminDBPath
+	before := messageCount(t, path)
+	c, token := login(t, ts)
+
+	body := postForm(t, c, ts.URL+"/admin/filters/apply/preview", url.Values{
+		"confirm": {token}, "pattern": {`(?i)^uptime\s*:\s*\d`},
+	})
+	applyToken := extractApplyToken(t, body)
+	if applyToken == "" {
+		t.Fatal("no apply token in the preview")
+	}
+
+	resp, err := c.PostForm(ts.URL+"/admin/filters/apply/delete", url.Values{
+		"confirm":     {token},
+		"pattern":     {`(?i)^uptime\s*:\s*\d`},
+		"apply_token": {applyToken},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(resp.Request.URL.RawQuery, "Deleted+2") {
+		t.Fatalf("the delete did not report removing 2: %q", resp.Request.URL.RawQuery)
+	}
+	if after := messageCount(t, path); after != before-2 {
+		t.Fatalf("%d remain, want %d", after, before-2)
+	}
+	// The real messages are still there.
+	if after := messageCount(t, path); after != 4 {
+		t.Fatalf("%d remain, want the four real messages", after)
+	}
+}
+
+// TestApplyRequiresAPreview is the safety property: a delete cannot be triggered
+// without first seeing the count. The token encodes the pattern, so it also
+// cannot be reused for a different one.
+func TestApplyRequiresAPreview(t *testing.T) {
+	ts := newFilterServer(t)
+	path := lastAdminDBPath
+	before := messageCount(t, path)
+	c, token := login(t, ts)
+
+	// No token at all.
+	resp, err := c.PostForm(ts.URL+"/admin/filters/apply/delete", url.Values{
+		"confirm": {token}, "pattern": {`(?i)^uptime`},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(resp.Request.URL.RawQuery, "Preview+this+pattern+first") {
+		t.Fatalf("a delete without a preview was not refused: %q", resp.Request.URL.RawQuery)
+	}
+	if after := messageCount(t, path); after != before {
+		t.Fatal("a delete without a preview removed rows")
+	}
+
+	// A token for a different pattern must not work.
+	body := postForm(t, c, ts.URL+"/admin/filters/apply/preview", url.Values{
+		"confirm": {token}, "pattern": {`^NOTHING_MATCHES_THIS$`},
+	})
+	stolen := extractApplyToken(t, body)
+	resp, err = c.PostForm(ts.URL+"/admin/filters/apply/delete", url.Values{
+		"confirm": {token}, "pattern": {`(?i)^uptime`}, "apply_token": {stolen},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if after := messageCount(t, path); after != before {
+		t.Fatal("a token from a different pattern was accepted")
+	}
+}
+
+func TestApplyRefusesAnInvalidPattern(t *testing.T) {
+	ts := newFilterServer(t)
+	path := lastAdminDBPath
+	before := messageCount(t, path)
+	c, token := login(t, ts)
+	body := postForm(t, c, ts.URL+"/admin/filters/apply/preview", url.Values{
+		"confirm": {token}, "pattern": {"([unclosed"},
+	})
+	if !strings.Contains(body, "will not compile") {
+		t.Fatalf("a broken pattern was not reported:\n%s", firstLines(body, 30))
+	}
+	if after := messageCount(t, path); after != before {
+		t.Fatal("a broken pattern deleted rows")
+	}
+}
+
+// ---- helpers ----
+
+func postForm(t *testing.T, c *http.Client, u string, v url.Values) string {
+	t.Helper()
+	resp, err := c.PostForm(u, v)
+	if err != nil {
+		t.Fatalf("post %s: %v", u, err)
+	}
+	defer resp.Body.Close()
+	var b strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		b.Write(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	return b.String()
+}
+
+func extractApplyToken(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `name="apply_token" value="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(marker):]
+	return rest[:strings.Index(rest, `"`)]
+}

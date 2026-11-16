@@ -124,6 +124,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/filters/{id}/delete", s.deleteFilter)
 	mux.HandleFunc("POST /admin/filters/test", s.testFilter)
 	mux.HandleFunc("POST /admin/filters/purge", s.purgeAll)
+	mux.HandleFunc("POST /admin/filters/apply/preview", s.applyPreview)
+	mux.HandleFunc("POST /admin/filters/apply/delete", s.applyDelete)
 
 	mux.HandleFunc("GET /admin/sql", s.sqlPage)
 	mux.HandleFunc("POST /admin/sql/query", s.sqlRun)

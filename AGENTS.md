@@ -104,6 +104,10 @@ full suite before every commit.
    (`PurgeFilterMatches`, keyset-walked, called from `saveFilter` and
    `toggleFilter`); disabling deletes nothing. Validate the pattern before the
    save, so a broken one can never trigger a delete.
+   **Delete-by-pattern is preview-gated.** `applyPreview` counts and samples
+   without deleting; `applyDelete` requires `applyToken(pattern)`, an HMAC over
+   the pattern keyed by the admin password. Do not add a delete path that skips
+   the preview, and never widen the token to cover "any pattern".
 12. **Validation is bidirectional and exceptions beat it.** A message is stored
    only if both endpoints pass. The exception list is consulted first and wins
    in both directions, so a "drop" entry works for a station that prefixes would
