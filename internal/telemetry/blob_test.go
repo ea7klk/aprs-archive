@@ -14,6 +14,8 @@ func TestEncodedBlobCatchesTheObservedPayloads(t *testing.T) {
 		"yegE8YcwFwagwmCBe/IIyUrludmU5GOt/UtEkvwyE+sHExSB",
 		"BZwHZOw3wMUEGzUoOkQ8BQzAtFGJLBszzFndG4vE6eyD",
 		";2j0hOp63Yd8L7CJoyE1OimaLBmC9xiN2",
+		"y7366eVDt2HHZohTHqBENuRWLaV/515BO;",  // trailing BBS terminator
+		";Ee+KwCYpzGBM0rhCP/J/YJcNJDGxyLSJA;", // both ends
 		"9Sh8q8eZJHaS2EF/yN1AxdPUaDYrCaOrWsQpfginLw",
 	}
 	for _, b := range blobs {

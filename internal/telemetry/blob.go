@@ -48,8 +48,8 @@ const minBlobEntropy = 4.3
 //
 // Three conditions, all needed:
 //
-//   - every character is in the base64 or base64url alphabet (an optional
-//     leading ';' is allowed: a packet BBS prefixes lines with it);
+//   - every character is in the base64 or base64url alphabet (the ';' a packet
+//     BBS wraps a line in is stripped from both ends first);
 //   - it is at least minBlobLen characters;
 //   - it mixes upper and lower case, contains a digit or '+/=', and has entropy
 //     of at least minBlobEntropy bits per character.
@@ -60,7 +60,10 @@ const minBlobEntropy = 4.3
 // ("L+12283+10282+...") out.
 func isEncodedBlob(text string) bool {
 	s := strings.TrimSpace(text)
-	s = strings.TrimPrefix(s, ";")
+	// A packet BBS wraps a line in ';' — sometimes leading, sometimes trailing,
+	// sometimes both. Strip both ends before the alphabet test, or a single
+	// terminator hides an otherwise obvious payload.
+	s = strings.Trim(s, ";")
 	if len(s) < minBlobLen {
 		return false
 	}
