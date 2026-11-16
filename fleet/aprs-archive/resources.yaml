@@ -48,7 +48,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: collector
-        image: ghcr.io/ea7klk/aprs-archive@sha256:9873b9e8b2c024e4d3132da5670ff06f1266973ade2438263f13c0782c7c104b
+        image: ghcr.io/ea7klk/aprs-archive@sha256:2e9ad94df6c1644aa8f8dd9748a646a61834aa2ce8a0edf57f3d0c760a117a24
         imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/aprs-archive-collector"]
         env:
@@ -164,7 +164,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: web
-        image: ghcr.io/ea7klk/aprs-archive@sha256:9873b9e8b2c024e4d3132da5670ff06f1266973ade2438263f13c0782c7c104b
+        image: ghcr.io/ea7klk/aprs-archive@sha256:2e9ad94df6c1644aa8f8dd9748a646a61834aa2ce8a0edf57f3d0c760a117a24
         imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/aprs-archive-web"]
         env:
@@ -299,7 +299,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: admin
-        image: ghcr.io/ea7klk/aprs-archive@sha256:9873b9e8b2c024e4d3132da5670ff06f1266973ade2438263f13c0782c7c104b
+        image: ghcr.io/ea7klk/aprs-archive@sha256:2e9ad94df6c1644aa8f8dd9748a646a61834aa2ce8a0edf57f3d0c760a117a24
         imagePullPolicy: IfNotPresent
         # A separate binary from the public server: its own route table, so a
         # route cannot leak between the two applications.
