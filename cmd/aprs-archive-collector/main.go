@@ -119,6 +119,15 @@ func run() error {
 	}
 	checker := newValidator(ctx, db, fetcher)
 
+	// Telemetry filters: bodies that are machine output rather than
+	// conversation. Seeded on a new archive, edited on the admin page, reloaded
+	// on the same minute tick so a new rule takes effect without a restart.
+	if err := store.EnsureMessageFilters(ctx, db); err != nil {
+		log.Printf("could not seed the default message filters: %v", err)
+	}
+	filters := newFilterState(ctx, db)
+	go telemetryWatchLoop(ctx, db, filters)
+
 	// Seed the standing exception if the operator has not set one: APRSPH is a
 	// bot the archive wants, and having to remember that after every wipe is
 	// the kind of detail that gets forgotten.
@@ -148,6 +157,19 @@ func run() error {
 	go watchLoop(ctx, checker)
 	go prefixRefreshLoop(ctx, db, fetcher, time.Duration(listRefresh)*time.Hour)
 
+	// One-off repair for telemetry that was stored before the filters existed.
+	// Opt-in, because it walks the whole archive and deletes rows.
+	if env("APRS_ARCHIVE_PURGE_TELEMETRY", "") == "1" {
+		log.Printf("purging stored telemetry matched by the enabled filters")
+		start := time.Now()
+		removed, err := store.PurgeTelemetry(ctx, db, filters.Drop)
+		if err != nil {
+			log.Printf("telemetry purge: %v", err)
+		} else {
+			log.Printf("telemetry purge removed %d messages in %s", removed, time.Since(start).Round(time.Second))
+		}
+	}
+
 	// The assembler holds the parts of multi-part messages until the set is
 	// complete. Each part is also stored immediately, so a set whose last part
 	// never arrives still leaves its content in the archive.
@@ -167,6 +189,12 @@ func run() error {
 		// output, and a message to a machine is a command. Neither is an
 		// amateur operator's conversation.
 		if !checker.Keep(p.From, p.To) {
+			return
+		}
+		// Machine output addressed as a message: an uptime string, a tracker
+		// health block, a series of bare readings. The callsigns are valid;
+		// the body is what gives it away.
+		if filters.Drop(p.Text) {
 			return
 		}
 		partID, err := writer.RecordPacket(ctx, p, at)
@@ -192,7 +220,7 @@ func run() error {
 		log.Printf("assembled a %d-part message from=%s to=%s", len(replacedIDs), p.From, p.To)
 	}
 
-	healthSrv := startHealth(cfg.healthAddr, client, db, checker)
+	healthSrv := startHealth(cfg.healthAddr, client, db, checker, filters)
 	defer shutdown(healthSrv)
 
 	go flushLoop(ctx, writer, &pending, cfg.flushInterval)
@@ -323,7 +351,7 @@ func env(key, fallback string) string {
 
 // startHealth serves /livez, /readyz and /status for Kubernetes probes and for
 // an operator who wants to know what the collector is doing without reading logs.
-func startHealth(addr string, c *client, db *sql.DB, checker *validator) *http.Server {
+func startHealth(addr string, c *client, db *sql.DB, checker *validator, filters *filterState) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -344,12 +372,15 @@ func startHealth(addr string, c *client, db *sql.DB, checker *validator) *http.S
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		connected := c.connected.Load()
 		gen, count, fetched := checker.prefixState()
+		filtered, perRule, ruleCount := filters.totals()
 		fmt.Fprintf(w, "version=%s\nconnected=%t\nconnects=%d\nlines=%d\npackets=%d\nlast_error=%q\n"+
 			"prefix_generation=%d\nprefix_count=%d\nprefix_fetched=%s\n"+
-			"dropped_bot=%d\ndropped_no_list=%d\nprefix_reloads=%d\n",
+			"dropped_bot=%d\ndropped_no_list=%d\nprefix_reloads=%d\n"+
+			"filters_active=%d\nfilters_dropped=%d\nfilter_hits=%v\n",
 			version, connected, c.connects.Load(), c.lines.Load(), c.packets.Load(), c.lastErrorString(),
 			gen, count, fetched.Format(time.RFC3339),
-			checker.droppedBot.Load(), checker.droppedNoList.Load(), checker.reloads.Load())
+			checker.droppedBot.Load(), checker.droppedNoList.Load(), checker.reloads.Load(),
+			ruleCount, filtered, perRule)
 	})
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {

@@ -93,7 +93,14 @@ full suite before every commit.
    drops the APRS-IS session and loses every packet in the gap. Never write a
    body without parsing it first, and keep the loaded list when a cached body
    fails to parse. With no list at all, store nothing (fail closed).
-11. **Validation is bidirectional and exceptions beat it.** A message is stored
+11. **Telemetry filters are rows, and a false positive deletes a human's
+   message.** `message_filters` holds Go regular expressions applied to the body;
+   the collector compiles them and reloads on the minute tick. A save is refused
+   if the pattern does not compile. Patterns must match a *shape* no person
+   types — never "short message" or "mostly digits": `73` and `73!` are real
+   sign-offs and must survive. Broad rules ship disabled (`EnabledByDefault:
+   false`) so an operator reviews the match count before enabling them.
+12. **Validation is bidirectional and exceptions beat it.** A message is stored
    only if both endpoints pass. The exception list is consulted first and wins
    in both directions, so a "drop" entry works for a station that prefixes would
    accept. Exceptions are reloaded every minute, so the admin page takes effect

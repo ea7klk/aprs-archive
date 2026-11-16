@@ -118,6 +118,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/database/backup/{name}/delete", s.deleteBackup)
 	mux.HandleFunc("POST /admin/database/delete-before", s.deleteBefore)
 
+	mux.HandleFunc("GET /admin/filters", s.filtersPage)
+	mux.HandleFunc("POST /admin/filters", s.saveFilter)
+	mux.HandleFunc("POST /admin/filters/{id}/toggle", s.toggleFilter)
+	mux.HandleFunc("POST /admin/filters/{id}/delete", s.deleteFilter)
+	mux.HandleFunc("POST /admin/filters/test", s.testFilter)
+
 	mux.HandleFunc("GET /admin/sql", s.sqlPage)
 	mux.HandleFunc("POST /admin/sql/query", s.sqlRun)
 	mux.HandleFunc("POST /admin/sql/schema", s.sqlSchema)
@@ -188,6 +194,7 @@ type view struct {
 	Path          string
 	AdminNav      bool
 	SQLNav        bool
+	FiltersNav    bool
 	Error         string
 	Data          any
 	Now           time.Time
@@ -212,6 +219,7 @@ func (s *Server) renderStatus(w http.ResponseWriter, r *http.Request, status int
 		Path:          r.URL.Path,
 		AdminNav:      r.URL.Path == "/admin/database",
 		SQLNav:        r.URL.Path == "/admin/sql",
+		FiltersNav:    r.URL.Path == "/admin/filters",
 		Error:         errText,
 		Data:          data,
 		Now:           s.cfg.Now(),
@@ -441,4 +449,13 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// resultTo redirects to a named admin page with an outcome in the query string.
+func (s *Server) resultTo(w http.ResponseWriter, r *http.Request, page, msg string, ok bool) {
+	prefix := "ok="
+	if !ok {
+		prefix = "err="
+	}
+	http.Redirect(w, r, page+"?"+prefix+template.URLQueryEscaper(msg), http.StatusSeeOther)
 }

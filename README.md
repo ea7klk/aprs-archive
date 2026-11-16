@@ -118,6 +118,29 @@ collector reads it from there rather than keeping it only in memory:
 - **No list at all fails closed:** nothing is stored until one exists. A network
   failure must not quietly re-admit the bot traffic this validation removes.
 
+### Telemetry filters
+
+A large share of traffic is machine output addressed as a message: node uptimes,
+tracker health blocks, weather summaries, bare numeric series. The callsigns are
+valid, so callsign validation cannot see them; the body is what gives them away.
+
+Rules live in `message_filters` and are edited at `/admin/filters`. A message
+whose body matches any enabled pattern is dropped before storage. The page
+validates a pattern before saving it, shows how many stored rows it currently
+matches, and has a tester so a pattern can be checked against a real body before
+it is enabled. The collector reloads rules on its minute tick — no restart.
+
+Seven rules are seeded enabled; two broader ones ("frame checksum suffix",
+"memory dump") are seeded **disabled** for an operator to review first.
+
+Removing the telemetry already stored is an opt-in one-shot:
+
+```sh
+kubectl -n aprs set env deploy/aprs-archive-collector APRS_ARCHIVE_PURGE_TELEMETRY=1
+# wait for "telemetry purge removed N messages", then:
+kubectl -n aprs set env deploy/aprs-archive-collector APRS_ARCHIVE_PURGE_TELEMETRY-
+```
+
 Prefix validation cannot tell a station from a robot that named itself like one,
 so the operator maintains an **exception list** on the admin page. It is checked
 before the prefix list and wins in both directions. `APRSPH` is seeded as a

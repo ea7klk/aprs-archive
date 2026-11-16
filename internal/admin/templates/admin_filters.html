@@ -1,0 +1,62 @@
+{{define "admin_filters"}}{{template "admin_layout_start" .}}
+{{$d := .Data}}
+<div class="pagehead">
+  <div><p class="kicker">Admin</p><h1>Telemetry filters</h1><p class="lede">A message body matching any enabled pattern is dropped before storage — uptime strings, tracker health blocks, weather summaries, bare numeric series. Callsigns are validated separately; these rules work on what the message says.</p></div>
+</div>
+
+{{if $d.Flash}}<div class="flash">{{$d.Flash}}</div>{{end}}
+{{if $d.ErrorDetail}}<div class="error">{{$d.ErrorDetail}}</div>{{end}}
+
+<div class="strip"><h2>Patterns</h2><span>{{len $d.Filters}} rules</span></div>
+{{if $d.Filters}}
+<div class="scroll">
+<table class="tbl-pairs">
+  <thead><tr><th>Name</th><th>Pattern</th><th>Matches</th><th>State</th><th></th></tr></thead>
+  <tbody>
+  {{range $d.Filters}}
+    <tr>
+      <td><strong>{{.Name}}</strong>{{if .Note}}<br><small class="muted">{{.Note}}</small>{{end}}</td>
+      <td><code class="pre">{{.Pattern}}</code></td>
+      <td>{{if lt .Matches 0}}<span class="state-bad">compiles?</span>{{else}}{{num .Matches}}{{end}}</td>
+      <td>{{if .Enabled}}<span class="kind kind-message">on</span>{{else}}<span class="kind kind-bullet">off</span>{{end}}</td>
+      <td><div class="actions">
+        <a class="btn secondary small" href="/admin/filters?edit={{.ID}}">Edit</a>
+        <form method="post" action="/admin/filters/{{.ID}}/toggle"><input type="hidden" name="confirm" value="{{$.Confirm}}"><input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"><button class="btn secondary small" type="submit">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>
+        <form method="post" action="/admin/filters/{{.ID}}/delete"><input type="hidden" name="confirm" value="{{$.Confirm}}"><button class="btn danger small" type="submit" onclick="return confirm('Delete this filter?')">Delete</button></form>
+      </div></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted mt">No filters. Every message that passes callsign validation is stored.</p>
+{{end}}
+
+<div class="strip mt-lg"><h2>{{if $d.Edit}}Edit pattern{{else}}Add a pattern{{end}}</h2><span>Go regular expression</span></div>
+<form class="stack" method="post" action="/admin/filters">
+  <input type="hidden" name="confirm" value="{{.Confirm}}">
+  {{with $d.Edit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
+  <div class="cols">
+    <div><label for="f-name">Name</label><input id="f-name" name="name" required maxlength="80" value="{{with $d.Edit}}{{.Name}}{{end}}" placeholder="tracker status block"></div>
+    <div><label for="f-enabled">State</label><select id="f-enabled" name="enabled"><option value="true" {{if or (not $d.Edit) $d.Edit.Enabled}}selected{{end}}>enabled</option><option value="false" {{if and $d.Edit (not $d.Edit.Enabled)}}selected{{end}}>disabled</option></select></div>
+  </div>
+  <div><label for="f-pattern">Pattern</label><input id="f-pattern" name="pattern" required class="pre" value="{{with $d.Edit}}{{.Pattern}}{{end}}" placeholder="^\[S[\d.]+\s+[A-Z]+"></div>
+  <div><label for="f-note">Note</label><input id="f-note" name="note" value="{{with $d.Edit}}{{.Note}}{{end}}" placeholder="what it catches, and an example"></div>
+  <div class="row"><button class="btn" type="submit">Save</button>{{if $d.Edit}}<a class="btn secondary" href="/admin/filters">Cancel</a>{{end}}</div>
+</form>
+<p class="quiet mt-sm">Patterns are applied to the message body with <span class="accent">^</span> anchoring where you write it. A pattern that does not compile is refused here rather than silently ignored by the collector.</p>
+
+<div class="strip mt-lg"><h2>Test a body</h2><span>check before you enable</span></div>
+<form class="stack" method="post" action="/admin/filters/test">
+  <input type="hidden" name="confirm" value="{{.Confirm}}">
+  <div><label for="t-text">Message body</label><input id="t-text" name="text" class="pre" value="{{$d.TestText}}" placeholder="[S74.6 L8 V0 B0 A0 R1 G0 T14]~7d"></div>
+  <div><label for="t-pattern">Draft pattern (optional — leave empty to test the saved rules)</label><input id="t-pattern" name="pattern" class="pre" placeholder="^\[S"></div>
+  <div class="row"><button class="btn secondary" type="submit">Test</button></div>
+</form>
+{{if $d.TestRan}}
+  {{if $d.TestError}}<div class="error">That pattern will not compile: {{$d.TestError}}</div>
+  {{else if $d.TestMatch}}<div class="flash">Dropped — matched by <strong>{{$d.TestRule}}</strong>.</div>
+  {{else}}<div class="flash">Kept — no enabled pattern matches this body.</div>{{end}}
+{{end}}
+{{template "admin_layout_end" .}}{{end}}

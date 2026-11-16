@@ -112,3 +112,37 @@ CREATE TABLE IF NOT EXISTS prefix_cache (
     etag         TEXT    NOT NULL DEFAULT '',
     last_modified TEXT   NOT NULL DEFAULT ''
 );
+
+-- Patterns that mark a message as machine telemetry rather than conversation.
+--
+-- APRS-IS carries a great deal of monitoring output: node uptime, battery and
+-- temperature dumps, weather gateways, tracker status strings. They are
+-- addressed as messages, so the callsign validation cannot tell them apart from
+-- a person writing to another person — the *body* is what distinguishes them.
+--
+-- The patterns live here rather than in the binary because they are a judgement
+-- call about this network's traffic and they change as new devices appear. An
+-- operator edits them on the admin page; the collector picks up a new generation
+-- on its minute tick, without a restart.
+--
+-- `pattern` is a Go regular expression, anchored with ^ where it should be.
+-- A message whose body matches any enabled pattern is dropped before storage, in
+-- both address directions, exactly as bot callsigns are.
+CREATE TABLE IF NOT EXISTS message_filters (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    pattern     TEXT    NOT NULL,
+    note        TEXT    NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- Seeded rows can be restored if an operator deletes one by mistake.
+    builtin     INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0, 1)),
+    updated_at  INTEGER NOT NULL
+);
+
+-- A generation counter, bumped whenever the set of enabled patterns changes, so
+-- the collector can tell whether it needs to recompile without reading every
+-- row on each tick.
+CREATE TABLE IF NOT EXISTS message_filters_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL DEFAULT 0
+);
