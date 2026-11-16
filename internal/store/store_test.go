@@ -963,3 +963,49 @@ func TestWriterIsSafeForConcurrentFlush(t *testing.T) {
 		t.Fatalf("%d rows, want 200", n)
 	}
 }
+
+// TestSchemaMigrationAddsTheKindColumn covers an archive created before the
+// column existed: CREATE TABLE IF NOT EXISTS does not alter it, so the
+// migration must add the column explicitly and idempotently.
+func TestSchemaMigrationAddsTheKindColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := OpenWriter(path)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	// Simulate an older archive: drop the column by recreating the table
+	// without it, then re-open and let the migration run.
+	if _, err := db.Exec(`DROP TABLE message_filters`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE message_filters (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, pattern TEXT NOT NULL,
+		note TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+		builtin INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	db.Close()
+
+	db2, err := OpenWriter(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db2.Close()
+	var kind string
+	if err := db2.QueryRow(`SELECT COALESCE(kind,'regex') FROM message_filters LIMIT 1`).Scan(&kind); err != nil {
+		// No rows yet is fine; what matters is that the column exists.
+		var n int
+		if err := db2.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('message_filters') WHERE name='kind'`).Scan(&n); err != nil {
+			t.Fatalf("inspect: %v", err)
+		}
+		if n != 1 {
+			t.Fatal("the kind column was not added")
+		}
+	}
+	// And it is idempotent: opening again must not fail.
+	db3, err := OpenWriter(path)
+	if err != nil {
+		t.Fatalf("third open should be a no-op: %v", err)
+	}
+	db3.Close()
+}

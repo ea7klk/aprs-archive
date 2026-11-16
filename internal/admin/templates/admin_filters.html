@@ -19,7 +19,7 @@
   <tbody>
   {{range $d.Filters}}
     <tr>
-      <td><strong>{{.Name}}</strong>{{if .Note}}<br><small class="muted">{{.Note}}</small>{{end}}</td>
+      <td><strong>{{.Name}}</strong> <span class="kind kind-ack">{{.Kind}}</span>{{if .Note}}<br><small class="muted">{{.Note}}</small>{{end}}</td>
       <td><code class="pre">{{.Pattern}}</code></td>
       <td>{{if lt .Matches 0}}<span class="state-bad">compiles?</span>{{else}}{{num .Matches}}{{end}}</td>
       <td>{{if .Enabled}}<span class="kind kind-message">on</span>{{else}}<span class="kind kind-bullet">off</span>{{end}}</td>
@@ -45,7 +45,8 @@
     <div><label for="f-name">Name</label><input id="f-name" name="name" required maxlength="80" value="{{with $d.Edit}}{{.Name}}{{end}}" placeholder="tracker status block"></div>
     <div><label for="f-enabled">State</label><select id="f-enabled" name="enabled"><option value="true" {{if or (not $d.Edit) $d.Edit.Enabled}}selected{{end}}>enabled</option><option value="false" {{if and $d.Edit (not $d.Edit.Enabled)}}selected{{end}}>disabled</option></select></div>
   </div>
-  <div><label for="f-pattern">Pattern</label><input id="f-pattern" name="pattern" required class="pre" value="{{with $d.Edit}}{{.Pattern}}{{end}}" placeholder="^\[S[\d.]+\s+[A-Z]+"></div>
+  <div><label for="f-kind">Kind</label><select id="f-kind" name="kind">{{range $d.Kinds}}<option value="{{.ID}}" {{if and $d.Edit (eq $.Data.Edit.Kind .ID)}}selected{{end}}{{if and (not $d.Edit) (eq .ID "regex")}}selected{{end}}>{{.ID}} — {{.Desc}}</option>{{end}}</select></div>
+  <div><label for="f-pattern">Pattern <span class="muted">(for kind=encoded-blob this is only a label)</span></label><input id="f-pattern" name="pattern" required class="pre" value="{{with $d.Edit}}{{.Pattern}}{{end}}" placeholder="^\[S[\d.]+\s+[A-Z]+"></div>
   <div><label for="f-note">Note</label><input id="f-note" name="note" value="{{with $d.Edit}}{{.Note}}{{end}}" placeholder="what it catches, and an example"></div>
   <div class="row"><button class="btn" type="submit" onclick="return confirm('Save this filter? Stored messages matching it will be deleted.')">Save and purge matches</button>{{if $d.Edit}}<a class="btn secondary" href="/admin/filters">Cancel</a>{{end}}</div>
 </form>

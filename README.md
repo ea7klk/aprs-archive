@@ -144,8 +144,17 @@ validates a pattern before saving it, shows how many stored rows it currently
 matches, and has a tester so a pattern can be checked against a real body before
 it is enabled. The collector reloads rules on its minute tick — no restart.
 
-Seven rules are seeded enabled; two broader ones ("frame checksum suffix",
-"memory dump") are seeded **disabled** for an operator to review first.
+Seven rules are seeded enabled; three broader ones ("frame checksum suffix",
+"memory dump", "encoded blob") are seeded **disabled** for an operator to review
+first.
+
+A rule has a **kind**:
+
+- `regex` — a Go regular expression over the body.
+- `encoded-blob` — an opaque base64-like payload, detected in code by alphabet,
+  length, case mixture and Shannon entropy, because RE2 has no lookahead and
+  "looks random" is not expressible as a regular expression. The pattern field is
+  only a label for that kind.
 
 Removing the telemetry already stored is an opt-in one-shot:
 

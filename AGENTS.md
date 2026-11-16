@@ -104,6 +104,11 @@ full suite before every commit.
    (`PurgeFilterMatches`, keyset-walked, called from `saveFilter` and
    `toggleFilter`); disabling deletes nothing. Validate the pattern before the
    save, so a broken one can never trigger a delete.
+   A filter has a **kind**: `regex` or `encoded-blob`. The blob detector lives in
+   `internal/telemetry/blob.go` and is code, not a pattern, because RE2 cannot
+   express entropy. `ValidateKind` gates both, and `source.pattern` is only a
+   label for a non-regex kind. Add a new detector kind rather than contorting a
+   regex, and always test it against real `HelloBeiJing…`-style strings.
    **Delete-by-pattern is preview-gated.** `applyPreview` counts and samples
    without deleting; `applyDelete` requires `applyToken(pattern)`, an HMAC over
    the pattern keyed by the admin password. Do not add a delete path that skips

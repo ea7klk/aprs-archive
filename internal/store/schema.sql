@@ -134,6 +134,12 @@ CREATE TABLE IF NOT EXISTS message_filters (
     pattern     TEXT    NOT NULL,
     note        TEXT    NOT NULL DEFAULT '',
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- What the pattern means:
+    --   regex         a Go regular expression matched against the body
+    --   encoded-blob  an opaque encoded run (base64-like), detected by shape and
+    --                 entropy rather than by a regular expression, because RE2
+    --                 has no lookahead and "high entropy" is not a regex
+    kind        TEXT    NOT NULL DEFAULT 'regex',
     -- Seeded rows can be restored if an operator deletes one by mistake.
     builtin     INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0, 1)),
     updated_at  INTEGER NOT NULL

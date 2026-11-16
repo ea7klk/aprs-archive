@@ -19,9 +19,11 @@ import (
 
 // MessageFilter is one pattern.
 type MessageFilter struct {
-	ID        int64
-	Name      string
-	Pattern   string
+	ID      int64
+	Name    string
+	Pattern string
+	// Kind is "regex" or "encoded-blob".
+	Kind      string
 	Note      string
 	Enabled   bool
 	Builtin   bool
@@ -39,7 +41,9 @@ type MessageFilter struct {
 var DefaultMessageFilters = []struct {
 	Name    string
 	Pattern string
-	Note    string
+	// Kind defaults to regex.
+	Kind string
+	Note string
 	// EnabledByDefault is false for a rule broad enough that the operator should
 	// decide. It is seeded switched off, present and documented, one click away.
 	EnabledByDefault bool
@@ -99,6 +103,16 @@ var DefaultMessageFilters = []struct {
 		Note:    "Body ending in a two-character frame checksum: 'ok ST [S92.6 ...]~89', 'HA 8~c0', 'err busy~ad' (DL6TJ, DL6TJ-9). Review the matches before enabling.",
 	},
 	{
+		// Opaque encoded payloads: encrypted messages, packed frames, file
+		// fragments. Detected in code because a regex cannot say "looks random";
+		// see internal/telemetry/blob.go. Ships off: it removes content that has
+		// no readable words, which is the operator's call to make.
+		Name:    "encoded blob",
+		Kind:    "encoded-blob",
+		Pattern: "base64-like opaque run",
+		Note:    "A long base64-ish body with no words: '2NbMAEKDSEp5R7up8X84D83W5KDr9EPJ4SycmVdwuQ' (LA4HQ <-> LA3HQ). Review the matches before enabling.",
+	},
+	{
 		Name:    "memory dump",
 		Pattern: `^[A-Z]\d+/\d+\s+\d+:[0-9a-fuws]{16,}`,
 		Note:    "Position-indexed dump: 'M46/79 135:0u0000042s00s000u...' (DL6TJ-9).",
@@ -123,8 +137,8 @@ func EnsureMessageFilters(ctx context.Context, db *sql.DB) error {
 			enabled = 1
 		}
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO message_filters (name, pattern, note, enabled, builtin, updated_at)
-			VALUES (?, ?, ?, ?, 1, ?)`, f.Name, f.Pattern, sanitize.SingleLine(f.Note), enabled, time.Now().Unix()); err != nil {
+			INSERT INTO message_filters (name, pattern, kind, note, enabled, builtin, updated_at)
+			VALUES (?, ?, ?, ?, ?, 1, ?)`, f.Name, f.Pattern, kindOr(f.Kind), sanitize.SingleLine(f.Note), enabled, time.Now().Unix()); err != nil {
 			return fmt.Errorf("seed filter %q: %w", f.Name, err)
 		}
 	}
@@ -135,7 +149,7 @@ func EnsureMessageFilters(ctx context.Context, db *sql.DB) error {
 // ListMessageFilters returns every pattern, enabled or not.
 func ListMessageFilters(ctx context.Context, db *sql.DB) ([]MessageFilter, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, name, pattern, note, enabled, builtin, updated_at
+		SELECT id, name, pattern, COALESCE(kind,'regex'), note, enabled, builtin, updated_at
 		FROM message_filters ORDER BY enabled DESC, name`)
 	if err != nil {
 		return nil, err
@@ -146,7 +160,7 @@ func ListMessageFilters(ctx context.Context, db *sql.DB) ([]MessageFilter, error
 		var f MessageFilter
 		var enabled, builtin int
 		var at int64
-		if err := rows.Scan(&f.ID, &f.Name, &f.Pattern, &f.Note, &enabled, &builtin, &at); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Pattern, &f.Kind, &f.Note, &enabled, &builtin, &at); err != nil {
 			return nil, err
 		}
 		f.Enabled = enabled == 1
@@ -160,7 +174,7 @@ func ListMessageFilters(ctx context.Context, db *sql.DB) ([]MessageFilter, error
 // EnabledMessageFilters returns the patterns the collector should apply.
 func EnabledMessageFilters(ctx context.Context, db *sql.DB) ([]MessageFilter, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, name, pattern, note, enabled, builtin, updated_at
+		SELECT id, name, pattern, COALESCE(kind,'regex'), note, enabled, builtin, updated_at
 		FROM message_filters WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -171,7 +185,7 @@ func EnabledMessageFilters(ctx context.Context, db *sql.DB) ([]MessageFilter, er
 		var f MessageFilter
 		var enabled, builtin int
 		var at int64
-		if err := rows.Scan(&f.ID, &f.Name, &f.Pattern, &f.Note, &enabled, &builtin, &at); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Pattern, &f.Kind, &f.Note, &enabled, &builtin, &at); err != nil {
 			return nil, err
 		}
 		f.Enabled = enabled == 1
@@ -218,18 +232,18 @@ func SaveMessageFilter(ctx context.Context, db *sql.DB, f MessageFilter) (int64,
 	var id int64
 	if f.ID == 0 {
 		res, err := db.ExecContext(ctx, `
-			INSERT INTO message_filters (name, pattern, note, enabled, builtin, updated_at)
-			VALUES (?, ?, ?, ?, 0, ?)`,
-			name, f.Pattern, sanitize.SingleLine(f.Note), enabled, time.Now().Unix())
+			INSERT INTO message_filters (name, pattern, kind, note, enabled, builtin, updated_at)
+			VALUES (?, ?, ?, ?, ?, 0, ?)`,
+			name, f.Pattern, kindOr(f.Kind), sanitize.SingleLine(f.Note), enabled, time.Now().Unix())
 		if err != nil {
 			return 0, err
 		}
 		id, _ = res.LastInsertId()
 	} else {
 		if _, err := db.ExecContext(ctx, `
-			UPDATE message_filters SET name = ?, pattern = ?, note = ?, enabled = ?, updated_at = ?
+			UPDATE message_filters SET name = ?, pattern = ?, kind = ?, note = ?, enabled = ?, updated_at = ?
 			WHERE id = ?`,
-			name, f.Pattern, sanitize.SingleLine(f.Note), enabled, time.Now().Unix(), f.ID); err != nil {
+			name, f.Pattern, kindOr(f.Kind), sanitize.SingleLine(f.Note), enabled, time.Now().Unix(), f.ID); err != nil {
 			return 0, err
 		}
 		id = f.ID
@@ -394,4 +408,13 @@ func CountFilterMatches(ctx context.Context, db *sql.DB, matches func(string) bo
 		}
 	}
 	return n, rows.Err()
+}
+
+// kindOr defaults an empty kind to regex, so a caller that predates the column
+// keeps working.
+func kindOr(k string) string {
+	if k == "" {
+		return "regex"
+	}
+	return k
 }

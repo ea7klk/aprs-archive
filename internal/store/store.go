@@ -32,7 +32,7 @@ import (
 )
 
 // SchemaVersion is bumped whenever schema.sql changes in a way that needs code.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // DSN for the writing process.
 //
@@ -160,6 +160,17 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("apply schema: %w (statement: %.80s)", err, statement)
 		}
 	}
+	// Column additions for archives created by an earlier version. CREATE TABLE
+	// IF NOT EXISTS does not add a column to a table that already exists, so
+	// each one is applied explicitly and only when missing.
+	for _, col := range []struct{ table, column, decl string }{
+		// Schema 5: a filter is either a regex or a code-based detector.
+		{"message_filters", "kind", "TEXT NOT NULL DEFAULT 'regex'"},
+	} {
+		if err := addColumnIfMissing(ctx, tx, col.table, col.column, col.decl); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
@@ -251,4 +262,40 @@ func isTransientOpen(err error) bool {
 	return errors.Is(err, os.ErrNotExist) ||
 		strings.Contains(msg, "unable to open database file") ||
 		strings.Contains(msg, "no such file")
+}
+
+// addColumnIfMissing adds a column to an existing table when it is absent.
+//
+// It is idempotent and safe to run on every start, which is what makes the
+// migration path the same for a fresh archive and an upgraded one.
+func addColumnIfMissing(ctx context.Context, tx *sql.Tx, table, column, decl string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("inspect %s: %w", table, err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+decl); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
 }

@@ -38,6 +38,11 @@ type filterData struct {
 	TestError string
 	// Edit is the row being edited, if any.
 	Edit *store.MessageFilter
+	// Kinds are the rule kinds the form offers.
+	Kinds []struct {
+		ID   string
+		Desc string
+	}
 	// Apply is the "delete matching a pattern now" panel: the pattern as typed,
 	// and up to twelve examples of what it would delete.
 	Apply         string
@@ -78,6 +83,7 @@ func (s *Server) filtersPage(w http.ResponseWriter, r *http.Request) {
 		Filters:     filters,
 		Flash:       r.URL.Query().Get("ok"),
 		ErrorDetail: r.URL.Query().Get("err"),
+		Kinds:       telemetry.Kinds,
 	}
 	// Live match counts, computed once per page load over the archive. A
 	// pattern's usefulness is not obvious from its text, so it is worth the
@@ -104,7 +110,12 @@ func (s *Server) filtersPage(w http.ResponseWriter, r *http.Request) {
 // counts as -1 so the page can say so rather than showing zero, which would
 // look like a harmless rule.
 func (s *Server) countMatches(ctx context.Context, pattern string) int64 {
-	if err := telemetry.Validate(pattern); err != nil {
+	return s.countRule(ctx, "regex", pattern)
+}
+
+// countRule counts stored bodies one rule matches, whatever its kind.
+func (s *Server) countRule(ctx context.Context, kind, pattern string) int64 {
+	if err := telemetry.ValidateKind(kind, pattern); err != nil {
 		return -1
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -114,7 +125,7 @@ func (s *Server) countMatches(ctx context.Context, pattern string) int64 {
 		return 0
 	}
 	defer rows.Close()
-	m := telemetry.Compile([]telemetry.Source{{ID: 0, Name: "test", Pattern: pattern}}, 0)
+	m := telemetry.Compile([]telemetry.Source{{ID: 0, Name: "test", Kind: kind, Pattern: pattern}}, 0)
 	var n int64
 	for rows.Next() {
 		var t string
@@ -137,11 +148,12 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 		ID:      id,
 		Name:    r.PostFormValue("name"),
 		Pattern: r.PostFormValue("pattern"),
+		Kind:    r.PostFormValue("kind"),
 		Note:    r.PostFormValue("note"),
 		Enabled: r.PostFormValue("enabled") == "on" || r.PostFormValue("enabled") == "true",
 	}
-	if err := telemetry.Validate(f.Pattern); err != nil {
-		s.resultTo(w, r, "/admin/filters", "That pattern will not compile: "+err.Error(), false)
+	if err := telemetry.ValidateKind(f.Kind, f.Pattern); err != nil {
+		s.resultTo(w, r, "/admin/filters", "That rule is not valid: "+err.Error(), false)
 		return
 	}
 	if _, err := store.SaveMessageFilter(r.Context(), s.db, f); err != nil {
@@ -155,7 +167,7 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 			"Saved, but disabled: no stored messages were removed and nothing new will be filtered until you enable it.", true)
 		return
 	}
-	removed, err := s.purgeForPattern(r.Context(), f.Pattern)
+	removed, err := s.purgeForRule(r.Context(), f.Kind, f.Pattern)
 	if err != nil {
 		s.resultTo(w, r, "/admin/filters",
 			"Saved and active, but removing the stored matches failed: "+err.Error()+". Use the purge action to retry.", false)
@@ -202,7 +214,7 @@ func (s *Server) toggleFilter(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enabling is the moment the rule takes effect, so the archive is brought
 	// into line with it in the same action.
-	removed, err := s.purgeForPattern(r.Context(), target.Pattern)
+	removed, err := s.purgeForRule(r.Context(), target.Kind, target.Pattern)
 	if err != nil {
 		s.resultTo(w, r, "/admin/filters",
 			"Filter enabled, but removing the stored matches failed: "+err.Error()+". Use the purge action to retry.", false)
@@ -218,10 +230,15 @@ func (s *Server) toggleFilter(w http.ResponseWriter, r *http.Request) {
 // the scan has its own timeout and the count is reported back to the operator
 // rather than performed silently.
 func (s *Server) purgeForPattern(parent context.Context, pattern string) (int64, error) {
-	if err := telemetry.Validate(pattern); err != nil {
+	return s.purgeForRule(parent, "regex", pattern)
+}
+
+// purgeForRule deletes the stored messages one rule matches.
+func (s *Server) purgeForRule(parent context.Context, kind, pattern string) (int64, error) {
+	if err := telemetry.ValidateKind(kind, pattern); err != nil {
 		return 0, err
 	}
-	m := telemetry.Compile([]telemetry.Source{{Name: "purge", Pattern: pattern}}, 0)
+	m := telemetry.Compile([]telemetry.Source{{Name: "purge", Kind: kind, Pattern: pattern}}, 0)
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	return store.PurgeFilterMatches(ctx, s.db, func(text string) bool {
@@ -245,10 +262,10 @@ func (s *Server) purgeAll(w http.ResponseWriter, r *http.Request) {
 	}
 	var total int64
 	for _, f := range filters {
-		if err := telemetry.Validate(f.Pattern); err != nil {
+		if err := telemetry.ValidateKind(f.Kind, f.Pattern); err != nil {
 			continue
 		}
-		m := telemetry.Compile([]telemetry.Source{{Name: f.Name, Pattern: f.Pattern}}, 0)
+		m := telemetry.Compile([]telemetry.Source{{Name: f.Name, Kind: f.Kind, Pattern: f.Pattern}}, 0)
 		n, err := store.PurgeFilterMatches(ctx, s.db, func(text string) bool {
 			_, ok := m.Match(text)
 			return ok
@@ -473,9 +490,10 @@ func (s *Server) filterPageData(r *http.Request) (*filterData, error) {
 		Filters:     filters,
 		Flash:       r.URL.Query().Get("ok"),
 		ErrorDetail: r.URL.Query().Get("err"),
+		Kinds:       telemetry.Kinds,
 	}
 	for i := range data.Filters {
-		data.Filters[i].Matches = s.countMatches(r.Context(), data.Filters[i].Pattern)
+		data.Filters[i].Matches = s.countRule(r.Context(), data.Filters[i].Kind, data.Filters[i].Pattern)
 	}
 	return data, nil
 }

@@ -50,7 +50,7 @@ func (f *filterState) reload(ctx context.Context, db *sql.DB) {
 	}
 	src := make([]telemetry.Source, 0, len(items))
 	for _, it := range items {
-		src = append(src, telemetry.Source{ID: it.ID, Name: it.Name, Pattern: it.Pattern})
+		src = append(src, telemetry.Source{ID: it.ID, Name: it.Name, Pattern: it.Pattern, Kind: it.Kind})
 	}
 	m := telemetry.Compile(src, gen)
 	if broken := m.Broken(); len(broken) > 0 {
