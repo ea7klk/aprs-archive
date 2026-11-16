@@ -406,9 +406,11 @@ func (s *Server) applyDelete(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Deleted %d messages, then stopped: %v", removed, err), false)
 		return
 	}
+	// The pattern itself is not echoed back into the redirect: a regular
+	// expression is mostly punctuation, and URL-escaping it produces a message
+	// nobody can read. The operator has just typed it; the count is the news.
 	s.resultTo(w, r, "/admin/filters", fmt.Sprintf(
-		"Deleted %d stored %s matching %s.", removed, plural(removed, "message", "messages"),
-		codeSpan(pattern)), true)
+		"Deleted %d stored %s matching that pattern.", removed, plural(removed, "message", "messages")), true)
 }
 
 // countAndSample scans the archive once for both the count and the examples.
@@ -477,7 +479,3 @@ func (s *Server) filterPageData(r *http.Request) (*filterData, error) {
 	}
 	return data, nil
 }
-
-// codeSpan renders a pattern in the outcome message without letting its
-// characters break the redirect.
-func codeSpan(pattern string) string { return "\"" + pattern + "\"" }
